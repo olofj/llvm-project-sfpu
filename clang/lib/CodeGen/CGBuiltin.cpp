@@ -22070,6 +22070,130 @@ Value *CodeGenFunction::EmitRISCVBuiltinExpr(unsigned BuiltinID,
     return Store;
   }
 
+  // XttSFPU builtins — all map 1:1 to riscv.tt.sfp* intrinsics
+  // Load/Store
+  case RISCV::BI__builtin_riscv_tt_sfpload:
+    ID = Intrinsic::riscv_tt_sfpload; break;
+  case RISCV::BI__builtin_riscv_tt_sfpload_lv:
+    ID = Intrinsic::riscv_tt_sfpload_lv; break;
+  case RISCV::BI__builtin_riscv_tt_sfploadi:
+    ID = Intrinsic::riscv_tt_sfploadi; break;
+  case RISCV::BI__builtin_riscv_tt_sfpstore:
+    ID = Intrinsic::riscv_tt_sfpstore; break;
+  case RISCV::BI__builtin_riscv_tt_sfplut:
+    ID = Intrinsic::riscv_tt_sfplut; break;
+  case RISCV::BI__builtin_riscv_tt_sfploadmacro:
+    ID = Intrinsic::riscv_tt_sfploadmacro; break;
+  // 3-operand arithmetic
+  case RISCV::BI__builtin_riscv_tt_sfpmad:
+    ID = Intrinsic::riscv_tt_sfpmad; break;
+  case RISCV::BI__builtin_riscv_tt_sfpmad_lv:
+    ID = Intrinsic::riscv_tt_sfpmad_lv; break;
+  case RISCV::BI__builtin_riscv_tt_sfpadd:
+    ID = Intrinsic::riscv_tt_sfpadd; break;
+  case RISCV::BI__builtin_riscv_tt_sfpadd_lv:
+    ID = Intrinsic::riscv_tt_sfpadd_lv; break;
+  case RISCV::BI__builtin_riscv_tt_sfpmul:
+    ID = Intrinsic::riscv_tt_sfpmul; break;
+  case RISCV::BI__builtin_riscv_tt_sfpmul_lv:
+    ID = Intrinsic::riscv_tt_sfpmul_lv; break;
+  // Immediate arithmetic
+  case RISCV::BI__builtin_riscv_tt_sfpmuli:
+    ID = Intrinsic::riscv_tt_sfpmuli; break;
+  case RISCV::BI__builtin_riscv_tt_sfpaddi:
+    ID = Intrinsic::riscv_tt_sfpaddi; break;
+  // Standard unary
+  case RISCV::BI__builtin_riscv_tt_sfpdivp2:
+    ID = Intrinsic::riscv_tt_sfpdivp2; break;
+  case RISCV::BI__builtin_riscv_tt_sfpdivp2_lv:
+    ID = Intrinsic::riscv_tt_sfpdivp2_lv; break;
+  case RISCV::BI__builtin_riscv_tt_sfpexexp:
+    ID = Intrinsic::riscv_tt_sfpexexp; break;
+  case RISCV::BI__builtin_riscv_tt_sfpexexp_lv:
+    ID = Intrinsic::riscv_tt_sfpexexp_lv; break;
+  case RISCV::BI__builtin_riscv_tt_sfpexman:
+    ID = Intrinsic::riscv_tt_sfpexman; break;
+  case RISCV::BI__builtin_riscv_tt_sfpexman_lv:
+    ID = Intrinsic::riscv_tt_sfpexman_lv; break;
+  case RISCV::BI__builtin_riscv_tt_sfpiadd:
+    ID = Intrinsic::riscv_tt_sfpiadd; break;
+  case RISCV::BI__builtin_riscv_tt_sfpshft:
+    ID = Intrinsic::riscv_tt_sfpshft; break;
+  case RISCV::BI__builtin_riscv_tt_sfpsetcc:
+    ID = Intrinsic::riscv_tt_sfpsetcc; break;
+  case RISCV::BI__builtin_riscv_tt_sfpmov:
+    ID = Intrinsic::riscv_tt_sfpmov; break;
+  case RISCV::BI__builtin_riscv_tt_sfpmov_lv:
+    ID = Intrinsic::riscv_tt_sfpmov_lv; break;
+  case RISCV::BI__builtin_riscv_tt_sfpabs:
+    ID = Intrinsic::riscv_tt_sfpabs; break;
+  case RISCV::BI__builtin_riscv_tt_sfpabs_lv:
+    ID = Intrinsic::riscv_tt_sfpabs_lv; break;
+  case RISCV::BI__builtin_riscv_tt_sfpand:
+    ID = Intrinsic::riscv_tt_sfpand; break;
+  case RISCV::BI__builtin_riscv_tt_sfpor:
+    ID = Intrinsic::riscv_tt_sfpor; break;
+  case RISCV::BI__builtin_riscv_tt_sfpnot:
+    ID = Intrinsic::riscv_tt_sfpnot; break;
+  case RISCV::BI__builtin_riscv_tt_sfpnot_lv:
+    ID = Intrinsic::riscv_tt_sfpnot_lv; break;
+  case RISCV::BI__builtin_riscv_tt_sfplz:
+    ID = Intrinsic::riscv_tt_sfplz; break;
+  case RISCV::BI__builtin_riscv_tt_sfplz_lv:
+    ID = Intrinsic::riscv_tt_sfplz_lv; break;
+  case RISCV::BI__builtin_riscv_tt_sfpsetexp:
+    ID = Intrinsic::riscv_tt_sfpsetexp; break;
+  case RISCV::BI__builtin_riscv_tt_sfpsetman:
+    ID = Intrinsic::riscv_tt_sfpsetman; break;
+  case RISCV::BI__builtin_riscv_tt_sfpsetsgn:
+    ID = Intrinsic::riscv_tt_sfpsetsgn; break;
+  // CC stack / predication
+  case RISCV::BI__builtin_riscv_tt_sfppushc:
+    ID = Intrinsic::riscv_tt_sfppushc; break;
+  case RISCV::BI__builtin_riscv_tt_sfppopc:
+    ID = Intrinsic::riscv_tt_sfppopc; break;
+  case RISCV::BI__builtin_riscv_tt_sfpcompc:
+    ID = Intrinsic::riscv_tt_sfpcompc; break;
+  case RISCV::BI__builtin_riscv_tt_sfpencc:
+    ID = Intrinsic::riscv_tt_sfpencc; break;
+  case RISCV::BI__builtin_riscv_tt_sfpnop:
+    ID = Intrinsic::riscv_tt_sfpnop; break;
+  // Cross-lane / transpose
+  case RISCV::BI__builtin_riscv_tt_sfptransp:
+    ID = Intrinsic::riscv_tt_sfptransp; break;
+  case RISCV::BI__builtin_riscv_tt_sfpxor:
+    ID = Intrinsic::riscv_tt_sfpxor; break;
+  // Rounding / Cast
+  case RISCV::BI__builtin_riscv_tt_sfpstochrnd:
+    ID = Intrinsic::riscv_tt_sfpstochrnd; break;
+  case RISCV::BI__builtin_riscv_tt_sfpcast:
+    ID = Intrinsic::riscv_tt_sfpcast; break;
+  case RISCV::BI__builtin_riscv_tt_sfpcast_lv:
+    ID = Intrinsic::riscv_tt_sfpcast_lv; break;
+  // Config / Control
+  case RISCV::BI__builtin_riscv_tt_sfpconfig:
+    ID = Intrinsic::riscv_tt_sfpconfig; break;
+  // Swap / Shift2 / LUT
+  case RISCV::BI__builtin_riscv_tt_sfpswap:
+    ID = Intrinsic::riscv_tt_sfpswap; break;
+  case RISCV::BI__builtin_riscv_tt_sfpshft2:
+    ID = Intrinsic::riscv_tt_sfpshft2; break;
+  case RISCV::BI__builtin_riscv_tt_sfplutfp32:
+    ID = Intrinsic::riscv_tt_sfplutfp32; break;
+  // BH-only
+  case RISCV::BI__builtin_riscv_tt_sfpmul24:
+    ID = Intrinsic::riscv_tt_sfpmul24; break;
+  case RISCV::BI__builtin_riscv_tt_sfpmul24_lv:
+    ID = Intrinsic::riscv_tt_sfpmul24_lv; break;
+  case RISCV::BI__builtin_riscv_tt_sfparecip:
+    ID = Intrinsic::riscv_tt_sfparecip; break;
+  case RISCV::BI__builtin_riscv_tt_sfparecip_lv:
+    ID = Intrinsic::riscv_tt_sfparecip_lv; break;
+  case RISCV::BI__builtin_riscv_tt_sfpgt:
+    ID = Intrinsic::riscv_tt_sfpgt; break;
+  case RISCV::BI__builtin_riscv_tt_sfple:
+    ID = Intrinsic::riscv_tt_sfple; break;
+
   // Vector builtins are handled from here.
 #include "clang/Basic/riscv_vector_builtin_cg.inc"
   // SiFive Vector builtins are handled from here.

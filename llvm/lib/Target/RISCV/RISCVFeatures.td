@@ -1397,3 +1397,6 @@ def FeatureForcedSWShadowStack : SubtargetFeature<
     "forced-sw-shadow-stack", "HasForcedSWShadowStack", "true",
     "Implement shadow stack with software.">;
 def HasForcedSWShadowStack : Predicate<"Subtarget->hasForcedSWShadowStack()">;
+
+// Tenstorrent SFPU Vector Unit
+include "RISCVFeaturesXttSFPU.td"

@@ -262,6 +262,38 @@ static DecodeStatus DecodeVRM8RegisterClass(MCInst &Inst, uint32_t RegNo,
   return MCDisassembler::Success;
 }
 
+// Tenstorrent SFPU LReg register decoders
+static DecodeStatus DecodeSFPURegsRegisterClass(MCInst &Inst, uint32_t RegNo,
+                                                uint64_t Address,
+                                                const MCDisassembler *Decoder) {
+  if (RegNo >= 8)  // L0-L7 only
+    return MCDisassembler::Fail;
+  MCRegister Reg = RISCV::L0 + RegNo;
+  Inst.addOperand(MCOperand::createReg(Reg));
+  return MCDisassembler::Success;
+}
+
+static DecodeStatus DecodeSFPUAllRegsRegisterClass(MCInst &Inst, uint32_t RegNo,
+                                                   uint64_t Address,
+                                                   const MCDisassembler *Decoder) {
+  if (RegNo > 16)  // L0-L16
+    return MCDisassembler::Fail;
+  MCRegister Reg = RISCV::L0 + RegNo;
+  Inst.addOperand(MCOperand::createReg(Reg));
+  return MCDisassembler::Success;
+}
+
+static DecodeStatus DecodeSFPUStoreRegsRegisterClass(MCInst &Inst, uint32_t RegNo,
+                                                     uint64_t Address,
+                                                     const MCDisassembler *Decoder) {
+  // L0-L11 and L16 (not L12-L15, per E-005)
+  if (RegNo > 16 || (RegNo >= 12 && RegNo <= 15))
+    return MCDisassembler::Fail;
+  MCRegister Reg = RISCV::L0 + RegNo;
+  Inst.addOperand(MCOperand::createReg(Reg));
+  return MCDisassembler::Success;
+}
+
 static DecodeStatus decodeVMaskReg(MCInst &Inst, uint32_t RegNo,
                                    uint64_t Address,
                                    const MCDisassembler *Decoder) {

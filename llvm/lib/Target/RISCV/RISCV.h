@@ -93,6 +93,28 @@ void initializeRISCVO0PreLegalizerCombinerPass(PassRegistry &);
 
 FunctionPass *createRISCVPreLegalizerCombiner();
 void initializeRISCVPreLegalizerCombinerPass(PassRegistry &);
+
+// Tenstorrent SFPU passes
+FunctionPass *createRISCVXttSFPUCombinePass();
+void initializeRISCVXttSFPUCombinePass(PassRegistry &);
+
+FunctionPass *createRISCVXttSFPUErrataPass();
+void initializeRISCVXttSFPUErrataPass(PassRegistry &);
+
+FunctionPass *createRISCVXttSFPULivenessPass();
+void initializeRISCVXttSFPULivenessPass(PassRegistry &);
+
+FunctionPass *createRISCVXttSFPUReplayPass();
+void initializeRISCVXttSFPUReplayPass(PassRegistry &);
+
+FunctionPass *createRISCVXttSFPUSynthPass();
+void initializeRISCVXttSFPUSynthPass(PassRegistry &);
+
+FunctionPass *createRISCVXttSFPUConstraintsPass();
+void initializeRISCVXttSFPUConstraintsPass(PassRegistry &);
+
+FunctionPass *createRISCVXttSFPUPeepholePass();
+void initializeRISCVXttSFPUPeepholePass(PassRegistry &);
 } // namespace llvm
 
 #endif

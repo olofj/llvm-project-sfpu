@@ -539,6 +539,18 @@ void RISCVInstrInfo::copyPhysReg(MachineBasicBlock &MBB,
     return;
   }
 
+  // SFPU LReg->LReg copies via SFPMOV (opcode 0x7C, imm12=0, mod1=0).
+  // Destination must be in SFPURegs (L0-L7, allocatable).
+  // Source can be any readable register (SFPUAllRegs: L0-L16).
+  if (RISCV::SFPURegsRegClass.contains(DstReg) &&
+      (RISCV::SFPURegsRegClass.contains(SrcReg) ||
+       RISCV::SFPUAllRegsRegClass.contains(SrcReg))) {
+    BuildMI(MBB, MBBI, DL, get(RISCV::SFPMOV_REG), DstReg)
+        .addReg(SrcReg, getKillRegState(KillSrc))
+        .addImm(0);  // mod1=0
+    return;
+  }
+
   // VR->VR copies.
   static const TargetRegisterClass *RVVRegClasses[] = {
       &RISCV::VRRegClass,     &RISCV::VRM2RegClass,   &RISCV::VRM4RegClass,
@@ -613,6 +625,9 @@ void RISCVInstrInfo::storeRegToStackSlot(MachineBasicBlock &MBB,
     Opcode = RISCV::PseudoVSPILL7_M1;
   else if (RISCV::VRN8M1RegClass.hasSubClassEq(RC))
     Opcode = RISCV::PseudoVSPILL8_M1;
+  else if (RISCV::SFPURegsRegClass.hasSubClassEq(RC))
+    llvm_unreachable("SFPU register spilling not yet implemented — "
+                     "reduce register pressure or report a bug");
   else
     llvm_unreachable("Can't store this register to stack slot");
 
@@ -696,6 +711,9 @@ void RISCVInstrInfo::loadRegFromStackSlot(MachineBasicBlock &MBB,
     Opcode = RISCV::PseudoVRELOAD7_M1;
   else if (RISCV::VRN8M1RegClass.hasSubClassEq(RC))
     Opcode = RISCV::PseudoVRELOAD8_M1;
+  else if (RISCV::SFPURegsRegClass.hasSubClassEq(RC))
+    llvm_unreachable("SFPU register spilling not yet implemented — "
+                     "reduce register pressure or report a bug");
   else
     llvm_unreachable("Can't load this register from stack slot");
 

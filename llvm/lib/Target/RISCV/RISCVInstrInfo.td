@@ -2087,3 +2087,7 @@ include "RISCVInstrInfoXwch.td"
 //===----------------------------------------------------------------------===//
 
 include "RISCVInstrGISel.td"
+
+// Tenstorrent SFPU instructions
+include "RISCVInstrInfoXttSFPU.td"
+include "RISCVXttSFPUISelPatterns.td"

@@ -632,3 +632,6 @@ def SSP    : RISCVReg<0, "ssp">;
 
 // Dummy VCIX state register
 def VCIX_STATE : RISCVReg<0, "vcix_state">;
+
+// Tenstorrent SFPU LReg register file
+include "RISCVRegisterInfoXttSFPU.td"

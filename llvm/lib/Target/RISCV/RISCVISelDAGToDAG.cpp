@@ -2152,6 +2152,52 @@ void RISCVDAGToDAGISel::Select(SDNode *Node) {
     case Intrinsic::riscv_sf_vc_i_se:
       selectSF_VC_X_SE(Node);
       return;
+
+    // Tenstorrent SFPU void intrinsics — custom ISel because
+    // INTRINSIC_VOID chain nodes don't work with Pat<> patterns
+    // (mayStore/hasSideEffects flag mismatch with base class).
+    case Intrinsic::riscv_tt_sfpstore: {
+      // sfpstore(lreg_src, mod0, addr_mode, addr)
+      // → SFPSTORE_BH or SFPSTORE_WH depending on subtarget
+      SDValue Chain = Node->getOperand(0);
+      SDValue Src = Node->getOperand(2);      // lreg_src (register)
+      SDValue Mod0 = Node->getOperand(3);     // mod0 (TargetConstant)
+      SDValue AddrMode = Node->getOperand(4); // addr_mode (TargetConstant)
+      SDValue Addr = Node->getOperand(5);     // addr (TargetConstant)
+      unsigned Opc = Subtarget->hasVendorXttSFPUBH()
+                         ? RISCV::SFPSTORE_BH
+                         : RISCV::SFPSTORE_WH;
+      MachineSDNode *Store = CurDAG->getMachineNode(
+          Opc, DL, MVT::Other, {Src, Mod0, AddrMode, Addr, Chain});
+      ReplaceNode(Node, Store);
+      return;
+    }
+    case Intrinsic::riscv_tt_sfpconfig: {
+      // sfpconfig(imm16, vd, mod1) — all immediates
+      SDValue Chain = Node->getOperand(0);
+      SDValue Imm16 = Node->getOperand(2);
+      SDValue Vd = Node->getOperand(3);
+      SDValue Mod1 = Node->getOperand(4);
+      MachineSDNode *Cfg = CurDAG->getMachineNode(
+          RISCV::SFPCONFIG, DL, MVT::Other, {Imm16, Vd, Mod1, Chain});
+      ReplaceNode(Node, Cfg);
+      return;
+    }
+    case Intrinsic::riscv_tt_sfploadmacro: {
+      // sfploadmacro(lreg, mod0, addr_mode, addr)
+      SDValue Chain = Node->getOperand(0);
+      SDValue Lreg = Node->getOperand(2);
+      SDValue Mod0 = Node->getOperand(3);
+      SDValue AddrMode = Node->getOperand(4);
+      SDValue Addr = Node->getOperand(5);
+      unsigned Opc = Subtarget->hasVendorXttSFPUBH()
+                         ? RISCV::SFPLOADMACRO_BH
+                         : RISCV::SFPLOADMACRO_WH;
+      MachineSDNode *LM = CurDAG->getMachineNode(
+          Opc, DL, MVT::Other, {Lreg, Mod0, AddrMode, Addr, Chain});
+      ReplaceNode(Node, LM);
+      return;
+    }
     }
     break;
   }

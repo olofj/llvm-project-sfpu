@@ -128,6 +128,13 @@ extern "C" LLVM_EXTERNAL_VISIBILITY void LLVMInitializeRISCVTarget() {
   initializeRISCVDAGToDAGISelLegacyPass(*PR);
   initializeRISCVMoveMergePass(*PR);
   initializeRISCVPushPopOptPass(*PR);
+  initializeRISCVXttSFPUCombinePass(*PR);
+  initializeRISCVXttSFPUErrataPass(*PR);
+  initializeRISCVXttSFPULivenessPass(*PR);
+  initializeRISCVXttSFPUReplayPass(*PR);
+  initializeRISCVXttSFPUSynthPass(*PR);
+  initializeRISCVXttSFPUConstraintsPass(*PR);
+  initializeRISCVXttSFPUPeepholePass(*PR);
 }
 
 static StringRef computeDataLayout(const Triple &TT,
@@ -520,6 +527,13 @@ void RISCVPassConfig::addPreEmitPass2() {
     // ensuring return instruction is detected correctly.
     addPass(createRISCVPushPopOptimizationPass());
   }
+
+  // Tenstorrent SFPU post-RA passes (run before pseudo expansion)
+  addPass(createRISCVXttSFPUConstraintsPass());
+  addPass(createRISCVXttSFPUPeepholePass());
+  addPass(createRISCVXttSFPUReplayPass());
+  addPass(createRISCVXttSFPUErrataPass());
+
   addPass(createRISCVExpandPseudoPass());
 
   // Schedule the expansion of AMOs at the last possible moment, avoiding the
@@ -535,6 +549,11 @@ void RISCVPassConfig::addPreEmitPass2() {
 
 void RISCVPassConfig::addMachineSSAOptimization() {
   addPass(createRISCVVectorPeepholePass());
+
+  // Tenstorrent SFPU pre-RA passes
+  addPass(createRISCVXttSFPUCombinePass());
+  addPass(createRISCVXttSFPUSynthPass());
+  addPass(createRISCVXttSFPULivenessPass());
 
   TargetPassConfig::addMachineSSAOptimization();
 

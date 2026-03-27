@@ -157,6 +157,19 @@ BitVector RISCVRegisterInfo::getReservedRegs(const MachineFunction &MF) const {
   // Shadow stack pointer.
   markSuperRegs(Reserved, RISCV::SSP);
 
+  // Tenstorrent SFPU: reserve hardware-constant and special-purpose L-registers.
+  // L0-L7 remain allocatable (general-purpose SFPU working registers).
+  // L8-L10: read-only hardware constants (ln2 approx, 0.0, 1.0)
+  // L11-L14: SFPCONFIG-writable constants (convention: -1.0, 1/512, etc.)
+  // L15: read-only lane index register
+  // L16: macro staging register (SFPLOADMACRO/SFPSTORE only)
+  if (Subtarget.hasVendorXttSFPU()) {
+    for (MCPhysReg Reg : {RISCV::L8, RISCV::L9, RISCV::L10, RISCV::L11,
+                          RISCV::L12, RISCV::L13, RISCV::L14, RISCV::L15,
+                          RISCV::L16})
+      markSuperRegs(Reserved, Reg);
+  }
+
   assert(checkAllSuperRegsMarked(Reserved));
   return Reserved;
 }

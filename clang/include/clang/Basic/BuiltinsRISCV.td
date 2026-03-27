@@ -146,3 +146,92 @@ let Features = "zihintntl", Attributes = [CustomTypeChecking] in {
 def ntl_load : RISCVBuiltin<"void(...)">;
 def ntl_store : RISCVBuiltin<"void(...)">;
 } // Features = "zihintntl", Attributes = [CustomTypeChecking]
+
+//===----------------------------------------------------------------------===//
+// XttSFPU extension — Tenstorrent SFPU Vector Unit builtins.
+//===----------------------------------------------------------------------===//
+
+let Attributes = [NoThrow] in {
+let Features = "xttsfpu" in {
+
+// --- Load/Store ---
+def tt_sfpload      : RISCVBuiltin<"unsigned int(unsigned int, unsigned int, unsigned int)">;
+def tt_sfpload_lv   : RISCVBuiltin<"unsigned int(unsigned int, unsigned int, unsigned int, unsigned int)">;
+def tt_sfploadi     : RISCVBuiltin<"unsigned int(unsigned int, unsigned int)">;
+def tt_sfpstore     : RISCVBuiltin<"void(unsigned int, unsigned int, unsigned int, unsigned int)">;
+def tt_sfplut       : RISCVBuiltin<"unsigned int(unsigned int, unsigned int)">;
+def tt_sfploadmacro : RISCVBuiltin<"void(unsigned int, unsigned int, unsigned int, unsigned int)">;
+
+// --- 3-operand arithmetic ---
+def tt_sfpmad       : RISCVBuiltin<"unsigned int(unsigned int, unsigned int, unsigned int, unsigned int)">;
+def tt_sfpmad_lv    : RISCVBuiltin<"unsigned int(unsigned int, unsigned int, unsigned int, unsigned int, unsigned int)">;
+def tt_sfpadd       : RISCVBuiltin<"unsigned int(unsigned int, unsigned int, unsigned int, unsigned int)">;
+def tt_sfpadd_lv    : RISCVBuiltin<"unsigned int(unsigned int, unsigned int, unsigned int, unsigned int, unsigned int)">;
+def tt_sfpmul       : RISCVBuiltin<"unsigned int(unsigned int, unsigned int, unsigned int, unsigned int)">;
+def tt_sfpmul_lv    : RISCVBuiltin<"unsigned int(unsigned int, unsigned int, unsigned int, unsigned int, unsigned int)">;
+
+// --- Immediate arithmetic ---
+def tt_sfpmuli      : RISCVBuiltin<"unsigned int(unsigned int, unsigned int, unsigned int)">;
+def tt_sfpaddi      : RISCVBuiltin<"unsigned int(unsigned int, unsigned int, unsigned int)">;
+
+// --- Standard unary ---
+def tt_sfpdivp2     : RISCVBuiltin<"unsigned int(unsigned int, unsigned int, unsigned int)">;
+def tt_sfpdivp2_lv  : RISCVBuiltin<"unsigned int(unsigned int, unsigned int, unsigned int, unsigned int)">;
+def tt_sfpexexp     : RISCVBuiltin<"unsigned int(unsigned int, unsigned int, unsigned int)">;
+def tt_sfpexexp_lv  : RISCVBuiltin<"unsigned int(unsigned int, unsigned int, unsigned int, unsigned int)">;
+def tt_sfpexman     : RISCVBuiltin<"unsigned int(unsigned int, unsigned int, unsigned int)">;
+def tt_sfpexman_lv  : RISCVBuiltin<"unsigned int(unsigned int, unsigned int, unsigned int, unsigned int)">;
+def tt_sfpiadd      : RISCVBuiltin<"unsigned int(unsigned int, unsigned int, unsigned int)">;
+def tt_sfpshft      : RISCVBuiltin<"unsigned int(unsigned int, unsigned int, unsigned int)">;
+def tt_sfpsetcc     : RISCVBuiltin<"void(unsigned int, unsigned int, unsigned int)">;
+def tt_sfpmov       : RISCVBuiltin<"unsigned int(unsigned int, unsigned int, unsigned int)">;
+def tt_sfpmov_lv    : RISCVBuiltin<"unsigned int(unsigned int, unsigned int, unsigned int, unsigned int)">;
+def tt_sfpabs       : RISCVBuiltin<"unsigned int(unsigned int, unsigned int, unsigned int)">;
+def tt_sfpabs_lv    : RISCVBuiltin<"unsigned int(unsigned int, unsigned int, unsigned int, unsigned int)">;
+def tt_sfpand       : RISCVBuiltin<"unsigned int(unsigned int, unsigned int, unsigned int)">;
+def tt_sfpor        : RISCVBuiltin<"unsigned int(unsigned int, unsigned int, unsigned int)">;
+def tt_sfpnot       : RISCVBuiltin<"unsigned int(unsigned int, unsigned int, unsigned int)">;
+def tt_sfpnot_lv    : RISCVBuiltin<"unsigned int(unsigned int, unsigned int, unsigned int, unsigned int)">;
+def tt_sfplz        : RISCVBuiltin<"unsigned int(unsigned int, unsigned int, unsigned int)">;
+def tt_sfplz_lv     : RISCVBuiltin<"unsigned int(unsigned int, unsigned int, unsigned int, unsigned int)">;
+def tt_sfpsetexp    : RISCVBuiltin<"unsigned int(unsigned int, unsigned int, unsigned int)">;
+def tt_sfpsetman    : RISCVBuiltin<"unsigned int(unsigned int, unsigned int, unsigned int)">;
+def tt_sfpsetsgn    : RISCVBuiltin<"unsigned int(unsigned int, unsigned int, unsigned int)">;
+
+// --- CC stack / predication ---
+def tt_sfppushc     : RISCVBuiltin<"void()">;
+def tt_sfppopc      : RISCVBuiltin<"void()">;
+def tt_sfpcompc     : RISCVBuiltin<"void()">;
+def tt_sfpencc      : RISCVBuiltin<"void(unsigned int, unsigned int)">;
+def tt_sfpnop       : RISCVBuiltin<"void()">;
+
+// --- Cross-lane / transpose ---
+def tt_sfptransp    : RISCVBuiltin<"unsigned int(unsigned int, unsigned int, unsigned int)">;
+def tt_sfpxor       : RISCVBuiltin<"unsigned int(unsigned int, unsigned int, unsigned int)">;
+
+// --- Rounding / Cast ---
+def tt_sfpstochrnd  : RISCVBuiltin<"unsigned int(unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int)">;
+def tt_sfpcast      : RISCVBuiltin<"unsigned int(unsigned int, unsigned int, unsigned int)">;
+def tt_sfpcast_lv   : RISCVBuiltin<"unsigned int(unsigned int, unsigned int, unsigned int, unsigned int)">;
+
+// --- Config / Control ---
+def tt_sfpconfig    : RISCVBuiltin<"void(unsigned int, unsigned int, unsigned int)">;
+
+// --- Swap / Shift2 / LUT ---
+def tt_sfpswap      : RISCVBuiltin<"unsigned int(unsigned int, unsigned int, unsigned int)">;
+def tt_sfpshft2     : RISCVBuiltin<"unsigned int(unsigned int, unsigned int, unsigned int)">;
+def tt_sfplutfp32   : RISCVBuiltin<"unsigned int(unsigned int, unsigned int)">;
+
+} // Features = "xttsfpu"
+
+// --- BH-only builtins ---
+let Features = "xttsfpubh" in {
+def tt_sfpmul24     : RISCVBuiltin<"unsigned int(unsigned int, unsigned int, unsigned int, unsigned int)">;
+def tt_sfpmul24_lv  : RISCVBuiltin<"unsigned int(unsigned int, unsigned int, unsigned int, unsigned int, unsigned int)">;
+def tt_sfparecip    : RISCVBuiltin<"unsigned int(unsigned int, unsigned int, unsigned int)">;
+def tt_sfparecip_lv : RISCVBuiltin<"unsigned int(unsigned int, unsigned int, unsigned int, unsigned int)">;
+def tt_sfpgt        : RISCVBuiltin<"void(unsigned int, unsigned int, unsigned int)">;
+def tt_sfple        : RISCVBuiltin<"void(unsigned int, unsigned int, unsigned int)">;
+} // Features = "xttsfpu-bh"
+
+} // Attributes = [NoThrow]

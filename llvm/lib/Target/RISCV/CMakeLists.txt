@@ -52,6 +52,13 @@ add_llvm_target(RISCVCodeGen
   RISCVRegisterInfo.cpp
   RISCVSubtarget.cpp
   RISCVTargetMachine.cpp
+  RISCVXttSFPUCombine.cpp
+  RISCVXttSFPUConstraints.cpp
+  RISCVXttSFPUErrata.cpp
+  RISCVXttSFPULiveness.cpp
+  RISCVXttSFPUPeephole.cpp
+  RISCVXttSFPUReplay.cpp
+  RISCVXttSFPUSynth.cpp
   RISCVTargetObjectFile.cpp
   RISCVTargetTransformInfo.cpp
   RISCVVectorPeephole.cpp
