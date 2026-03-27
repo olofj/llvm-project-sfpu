@@ -102,20 +102,18 @@ bool RISCVXttSFPUCombine::tryCombineMulAdd(MachineBasicBlock &MBB) {
   const MachineRegisterInfo &MRI = MBB.getParent()->getRegInfo();
   bool Changed = false;
 
-  // Use a worklist to avoid iterator invalidation when erasing instructions.
-  SmallVector<MachineInstr *, 16> Worklist;
-  for (MachineInstr &MI : MBB)
-    if (MI.getOpcode() == RISCV::SFPADD)
-      Worklist.push_back(&MI);
+  for (auto MBBI = MBB.begin(), MBBE = MBB.end(); MBBI != MBBE; ) {
+    MachineInstr &AddMI = *MBBI;
+    ++MBBI;  // Advance before potential erase
 
-  for (MachineInstr *AddMI : Worklist) {
-    if (AddMI->getParent() == nullptr)
-      continue;  // Already erased
+    // Must be SFPADD (not _lv for now)
+    if (AddMI.getOpcode() != RISCV::SFPADD)
+      continue;
 
     // SFPADD operands: dest, src_a, src_b, src_c, mod1
     // Try both src_b and src_c as the MUL result
     for (unsigned OpIdx : {2u, 3u}) {
-      const MachineOperand &MulResultOp = AddMI->getOperand(OpIdx);
+      const MachineOperand &MulResultOp = AddMI.getOperand(OpIdx);
       if (!MulResultOp.isReg())
         continue;
 
@@ -133,28 +131,28 @@ bool RISCVXttSFPUCombine::tryCombineMulAdd(MachineBasicBlock &MBB) {
 
       // Get the "other" operand of SFPADD (the one that's not from MUL)
       unsigned OtherIdx = (OpIdx == 2) ? 3 : 2;
-      const MachineOperand &OtherOp = AddMI->getOperand(OtherIdx);
+      const MachineOperand &OtherOp = AddMI.getOperand(OtherIdx);
 
       // Build SFPMAD: dest = MUL.src_a * MUL.src_b + ADD.other
       // SFPMAD operands: dest, src_a, src_b, src_c, mod1
-      unsigned AddMod = AddMI->getOperand(4).getImm();
+      unsigned AddMod = AddMI.getOperand(4).getImm();
       unsigned MulMod = MulMI->getOperand(4).getImm();
       unsigned MadMod = AddMod ^ MulMod;
 
-      BuildMI(MBB, *AddMI, AddMI->getDebugLoc(), TII->get(RISCV::SFPMAD))
-          .add(AddMI->getOperand(0))       // dest (from ADD)
+      BuildMI(MBB, AddMI, AddMI.getDebugLoc(), TII->get(RISCV::SFPMAD))
+          .add(AddMI.getOperand(0))        // dest (from ADD)
           .add(MulMI->getOperand(1))       // src_a (from MUL)
           .add(MulMI->getOperand(2))       // src_b (from MUL)
           .add(OtherOp)                     // src_c (from ADD other)
           .addImm(MadMod);                  // mod1 = add_mod ^ mul_mod
 
-      // Remove the ADD and MUL
+      // Remove the ADD and MUL (iterator already advanced past AddMI)
+      AddMI.eraseFromParent();
       MulMI->eraseFromParent();
-      AddMI->eraseFromParent();
 
       Changed = true;
       LLVM_DEBUG(dbgs() << "  Combined MUL+ADD into MAD\n");
-      break;
+      break;  // Exit inner loop, outer loop already advanced
     }
   }
 

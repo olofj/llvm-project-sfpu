@@ -187,3 +187,8 @@ let SchedModel = SyntacoreSCR3RV64Model in {
   defm : SCR3_Unsupported;
   defm : SCR3_NoReadAdvances;
 }
+
+let SchedModel = SyntacoreSCR3RV32Model in {
+}
+let SchedModel = SyntacoreSCR3RV64Model in {
+}

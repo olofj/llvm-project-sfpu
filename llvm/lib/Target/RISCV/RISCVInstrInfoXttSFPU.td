@@ -609,6 +609,29 @@ def SFPLOADMACRO_WH : SFPULoadWH<0x93, "sfploadmacro",
 } // Predicates = [HasXttSFPUWH]
 
 //===----------------------------------------------------------------------===//
+// WH C-010: 3-Operand Arithmetic with dst=src_a Constraint
+//
+// On Wormhole, SFPMAD/SFPMUL/SFPADD have a hardware constraint where the
+// destination register must equal src_a. The hardware ignores the dest field
+// and always writes to src_a.
+//
+// These pseudo-instructions are selected on WH targets and enforce the
+// constraint through LLVM's register allocator tying mechanism.
+//
+// Reference: ttsim-analysis/ERRATA.md C-010
+//===----------------------------------------------------------------------===//
+
+let Predicates = [HasXttSFPUWH] in {
+
+let Constraints = "$lreg_dest = $lreg_src_a" in {
+  def SFPMAD_WH : SFPU3Op<0x84, "sfpmad">;
+  def SFPMUL_WH : SFPU3Op<0x86, "sfpmul">;
+  def SFPADD_WH : SFPU3Op<0x85, "sfpadd">;
+}
+
+} // Predicates = [HasXttSFPUWH]
+
+//===----------------------------------------------------------------------===//
 // BH-Only Instructions (C-009)
 //===----------------------------------------------------------------------===//
 

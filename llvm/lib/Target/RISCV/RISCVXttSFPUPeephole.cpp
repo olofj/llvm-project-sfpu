@@ -80,6 +80,7 @@ private:
 
   bool tryFuseLZSetCC(MachineBasicBlock &MBB);
   bool tryFuseExExpSetCC(MachineBasicBlock &MBB);
+  bool tryEliminateSelfMov(MachineBasicBlock &MBB);
 };
 
 } // end anonymous namespace
@@ -200,6 +201,40 @@ bool RISCVXttSFPUPeephole::tryFuseExExpSetCC(MachineBasicBlock &MBB) {
   return Changed;
 }
 
+/// Pattern: Self-MOV elimination (SFPMOV Lx, Lx, 0, 0 → delete)
+///
+/// After register allocation with WH C-010 constraints, the coalescer may
+/// leave behind identity MOVs where src == dest. These are safe to delete.
+bool RISCVXttSFPUPeephole::tryEliminateSelfMov(MachineBasicBlock &MBB) {
+  bool Changed = false;
+
+  for (auto MBBI = MBB.begin(), MBBE = MBB.end(); MBBI != MBBE; ) {
+    MachineInstr &MI = *MBBI++;
+
+    if (MI.getOpcode() != RISCV::SFPMOV_REG)
+      continue;
+
+    // SFPMOV_REG format: dest, src, mod1
+    // If dest == src and mod1 == 0, it's a no-op
+    if (MI.getNumOperands() < 3)
+      continue;
+
+    const MachineOperand &Dst = MI.getOperand(0);
+    const MachineOperand &Src = MI.getOperand(1);
+    const MachineOperand &Mod = MI.getOperand(2);
+
+    if (Dst.isReg() && Src.isReg() &&
+        Dst.getReg() == Src.getReg() &&
+        Mod.isImm() && Mod.getImm() == 0) {
+      LLVM_DEBUG(dbgs() << "  Eliminating self-MOV: " << MI);
+      MI.eraseFromParent();
+      Changed = true;
+    }
+  }
+
+  return Changed;
+}
+
 bool RISCVXttSFPUPeephole::runOnMachineFunction(MachineFunction &MF) {
   STI = &MF.getSubtarget<RISCVSubtarget>();
 
@@ -213,6 +248,7 @@ bool RISCVXttSFPUPeephole::runOnMachineFunction(MachineFunction &MF) {
   for (MachineBasicBlock &MBB : MF) {
     Changed |= tryFuseLZSetCC(MBB);
     Changed |= tryFuseExExpSetCC(MBB);
+    Changed |= tryEliminateSelfMov(MBB);
   }
 
   return Changed;

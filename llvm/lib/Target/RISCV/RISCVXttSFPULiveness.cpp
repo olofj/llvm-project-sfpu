@@ -134,17 +134,30 @@ bool RISCVXttSFPULiveness::selectLiveValueVariant(MachineInstr &MI,
   if (!isLiveAcrossPredication(MI, DestReg, *MI.getParent()))
     return false;
 
-  // Mark this instruction as needing the _lv variant.
-  // The _lv variant is encoded via a flag bit in the mod1 field.
-  // Implementation: set bit 3 of mod1 (MOD1_LV_FLAG = 0x8) to indicate
-  // live-value preservation.
+  // Replace the instruction opcode with its _lv variant.
+  // _lv variants have an extra "live" operand (operand 0) that specifies the
+  // register value to preserve in disabled lanes.
   //
-  // TODO: The exact _lv encoding mechanism depends on the instruction.
-  // For now, we add a target-specific flag that the MC emitter will check.
-  MI.setFlag(MachineInstr::MIFlag::NoMerge);  // Reuse flag as _lv marker
+  // The _lv instruction definitions are in RISCVInstrInfoXttSFPU.td:
+  //   SFPMOV_LV, SFPMAD_LV, SFPMUL_LV, SFPADD_LV, SFPCAST_LV, etc.
+  //
+  // Since _lv variants have a different operand count (extra live-in operand),
+  // we cannot simply change the opcode. Instead, we set the mod1 bit 3
+  // (MOD1_LV_FLAG = 0x8) to signal live-value preservation in the encoding.
+  // This matches the hardware behavior: bit 3 of mod1 tells the SFPU to
+  // merge the result with the existing register value per-lane.
+  unsigned Mod1Idx = MI.getNumOperands() - 1;
+  MachineOperand &Mod1Op = MI.getOperand(Mod1Idx);
+  if (Mod1Op.isImm()) {
+    unsigned OldMod = Mod1Op.getImm();
+    constexpr unsigned MOD1_LV_FLAG = 0x8;
+    Mod1Op.setImm(OldMod | MOD1_LV_FLAG);
+    LLVM_DEBUG(dbgs() << "  Set _lv flag (mod1 |= 0x8) for: " << MI);
+    return true;
+  }
 
-  LLVM_DEBUG(dbgs() << "  Selecting _lv variant for: " << MI);
-  return true;
+  LLVM_DEBUG(dbgs() << "  Could not set _lv flag (no imm mod1) for: " << MI);
+  return false;
 }
 
 bool RISCVXttSFPULiveness::runOnMachineFunction(MachineFunction &MF) {

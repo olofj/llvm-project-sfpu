@@ -286,13 +286,14 @@ bool RISCVXttSFPUReplay::runOnMachineFunction(MachineFunction &MF) {
         // Encode: (start_idx << 14) | (len << 4) | (0 << 1) | (1 << 0)
         unsigned ReplayLoadWord = (Slot << 14) | (Cand->Length << 4) | 0x01;
 
-        // Insert REPLAY-load before the original sequence
-        // This is a Tensix instruction (opcode 0x04), not an SFPU instruction.
-        // We emit it as a raw instruction word via an inline asm or custom MI.
-        // For now, we use the SFPNOP placeholder and add a comment.
-        // TODO: Add proper REPLAY instruction definition to TableGen.
-        BuildMI(MBB, *FirstInOriginal, DL, TII->get(RISCV::SFPNOP))
-            .setMIFlag(MachineInstr::MIFlag::FrameSetup);  // Tag for identification
+        // TTREPLAY is defined in RISCVInstrInfoXttSFPU.td (opcode 0x04).
+        // Emit REPLAY in "load" mode: record following instructions.
+        (void)ReplayLoadWord;
+        BuildMI(MBB, *FirstInOriginal, DL, TII->get(RISCV::TTREPLAY))
+            .addImm(Slot)            // start_idx
+            .addImm(Cand->Length)    // len
+            .addImm(0)               // exec_while_load = 0
+            .addImm(1);              // load_mode = 1 (record)
       }
 
       // Replace each clone with REPLAY(slot, len, 1, 0) = "execute" mode
@@ -306,9 +307,13 @@ bool RISCVXttSFPUReplay::runOnMachineFunction(MachineFunction &MF) {
         // Encode: (start_idx << 14) | (len << 4) | (1 << 1) | (0 << 0)
         unsigned ReplayExecWord = (Slot << 14) | (Cand->Length << 4) | 0x02;
 
-        // Insert REPLAY-execute before the clone, then delete the clone
-        BuildMI(MBB, *FirstInClone, DL, TII->get(RISCV::SFPNOP))
-            .setMIFlag(MachineInstr::MIFlag::FrameDestroy);  // Tag for identification
+        // Insert REPLAY in "execute" mode before the clone, then delete it.
+        (void)ReplayExecWord;
+        BuildMI(MBB, *FirstInClone, DL, TII->get(RISCV::TTREPLAY))
+            .addImm(Slot)            // start_idx
+            .addImm(Cand->Length)    // len
+            .addImm(1)               // exec_while_load = 1 (execute)
+            .addImm(0);              // load_mode = 0 (not recording)
 
         // Delete the clone instructions
         for (unsigned J = 0; J < Cand->Length && CloneStart + J < SFPUInstrs.size(); ++J) {

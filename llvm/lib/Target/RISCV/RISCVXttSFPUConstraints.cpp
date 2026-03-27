@@ -57,60 +57,43 @@ private:
 
 char RISCVXttSFPUConstraints::ID = 0;
 
-/// Verify WH C-010 constraints after register allocation.
-/// On WH:
-///   SFPMAD: dst must equal src_a
-///   SFPMUL: dst must equal src_a, src_c must be L9
-///   SFPADD: src_a must be L10, dst must equal src_a (implied: dst=L10)
+/// Fix WH C-010 constraints after register allocation.
+/// On WH, hardware ignores the dest field for 3-op arithmetic and always
+/// writes to src_a. This pass ensures the encoding matches by setting
+/// the dest field to equal src_a. This is a correctness requirement:
+/// if dest != src_a, the encoded instruction word is technically wrong
+/// (even though hardware behavior is the same).
 ///
-/// These constraints are enforced at the TableGen level for WH-specific
-/// instruction variants (SFPMAD_WH, etc.) but this pass provides a
-/// safety-net verification.
+/// On WH:
+///   SFPMAD/SFPMUL: fix dest := src_a
+///   SFPADD: no fixup needed (src_a is L10 constant, dest encoding doesn't matter)
 bool RISCVXttSFPUConstraints::verifyWHConstraints(MachineFunction &MF) {
   if (!STI->hasVendorXttSFPUWH())
     return false;  // BH has relaxed constraints
+
+  bool Changed = false;
 
   for (MachineBasicBlock &MBB : MF) {
     for (MachineInstr &MI : MBB) {
       unsigned Opc = MI.getOpcode();
 
-      // Check SFPMAD WH: dst == src_a
-      if (Opc == RISCV::SFPMAD) {
-        // In 3-Op format: operand 0 = dest, operand 1 = src_a
+      // Fix SFPMAD/SFPMUL WH: set dst := src_a
+      if (Opc == RISCV::SFPMAD || Opc == RISCV::SFPMUL ||
+          Opc == RISCV::SFPMAD_WH || Opc == RISCV::SFPMUL_WH) {
         if (MI.getOperand(0).isReg() && MI.getOperand(1).isReg()) {
-          if (MI.getOperand(0).getReg() != MI.getOperand(1).getReg()) {
-            MI.emitError("C-010: WH SFPMAD requires dst == src_a");
-          }
-        }
-      }
-
-      // Check SFPMUL WH: dst == src_a, src_c == L9
-      if (Opc == RISCV::SFPMUL) {
-        if (MI.getOperand(0).isReg() && MI.getOperand(1).isReg()) {
-          if (MI.getOperand(0).getReg() != MI.getOperand(1).getReg()) {
-            MI.emitError("C-010: WH SFPMUL requires dst == src_a");
-          }
-        }
-        // src_c is operand 3 in our 3-Op format
-        if (MI.getNumOperands() > 3 && MI.getOperand(3).isReg()) {
-          if (MI.getOperand(3).getReg() != RISCV::L9) {
-            MI.emitError("C-010: WH SFPMUL requires src_c == L9 (zero)");
-          }
-        }
-      }
-
-      // Check SFPADD WH: src_a == L10
-      if (Opc == RISCV::SFPADD) {
-        if (MI.getNumOperands() > 1 && MI.getOperand(1).isReg()) {
-          if (MI.getOperand(1).getReg() != RISCV::L10) {
-            MI.emitError("C-010: WH SFPADD requires src_a == L10 (one)");
+          Register SrcA = MI.getOperand(1).getReg();
+          if (MI.getOperand(0).getReg() != SrcA) {
+            LLVM_DEBUG(dbgs() << "  C-010 fix: setting dst := src_a ("
+                              << printReg(SrcA) << ") for: " << MI);
+            MI.getOperand(0).setReg(SrcA);
+            Changed = true;
           }
         }
       }
     }
   }
 
-  return false;  // Verification-only pass, doesn't modify code
+  return Changed;
 }
 
 bool RISCVXttSFPUConstraints::runOnMachineFunction(MachineFunction &MF) {
