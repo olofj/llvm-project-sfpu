@@ -17,58 +17,62 @@ let TargetPrefix = "riscv" in {
 
 //--- Load/Store Intrinsics ---
 
-// SFPLOAD: load from Dst to LReg — all args are immediates
+// SFPLOAD: load from Dst to LReg
+// mod0 and addr_mode are compile-time constants; addr is RUNTIME (from dst_reg[idx])
 def int_riscv_tt_sfpload
     : Intrinsic<[llvm_i32_ty],
                 [llvm_i32_ty, llvm_i32_ty, llvm_i32_ty], // mod0, addr_mode, addr
                 [IntrReadMem, IntrHasSideEffects,
-                 ImmArg<ArgIndex<0>>, ImmArg<ArgIndex<1>>, ImmArg<ArgIndex<2>>]>;
+                 ImmArg<ArgIndex<0>>, ImmArg<ArgIndex<1>>]>;
 
-// SFPLOADI: load immediate to LReg — both args are immediates
+// SFPLOADI: load immediate to LReg
+// mod0 is compile-time; imm16 can be RUNTIME (e.g. __f32asui(float))
 def int_riscv_tt_sfploadi
     : Intrinsic<[llvm_i32_ty],
                 [llvm_i32_ty, llvm_i32_ty],             // mod0, imm16
                 [IntrNoMem, IntrHasSideEffects,
-                 ImmArg<ArgIndex<0>>, ImmArg<ArgIndex<1>>]>;
+                 ImmArg<ArgIndex<0>>]>;
 
-// SFPSTORE: store LReg to Dst — arg 0 is register, rest are immediates
+// SFPSTORE: store LReg to Dst
+// mod0 and addr_mode are compile-time; addr is RUNTIME
 def int_riscv_tt_sfpstore
     : Intrinsic<[],
                 [llvm_i32_ty, llvm_i32_ty, llvm_i32_ty, llvm_i32_ty],
                 // lreg_src, mod0, addr_mode, addr
                 [IntrWriteMem, IntrHasSideEffects,
-                 ImmArg<ArgIndex<1>>, ImmArg<ArgIndex<2>>, ImmArg<ArgIndex<3>>]>;
+                 ImmArg<ArgIndex<1>>, ImmArg<ArgIndex<2>>]>;
 
-// SFPLUT: LUT lookup — 2 immediates (caller packs addr_mode|addr into dest_reg_addr)
+// SFPLUT: LUT lookup — mod0 is compile-time; dest_reg_addr can be runtime
 def int_riscv_tt_sfplut
     : Intrinsic<[llvm_i32_ty],
                 [llvm_i32_ty, llvm_i32_ty], // mod0, dest_reg_addr (packed)
                 [IntrReadMem, IntrHasSideEffects,
-                 ImmArg<ArgIndex<0>>, ImmArg<ArgIndex<1>>]>;
+                 ImmArg<ArgIndex<0>>]>;
 
-// SFPLOADMACRO: macro load (writes L16) — arg 0 is register, rest immediates
+// SFPLOADMACRO: macro load (writes L16)
+// mod0 is compile-time; addr_mode and addr can be runtime
 def int_riscv_tt_sfploadmacro
     : Intrinsic<[],
                 [llvm_i32_ty, llvm_i32_ty, llvm_i32_ty, llvm_i32_ty],
                 // lreg, mod0, addr_mode, addr
                 [IntrHasSideEffects,
-                 ImmArg<ArgIndex<1>>, ImmArg<ArgIndex<2>>, ImmArg<ArgIndex<3>>]>;
+                 ImmArg<ArgIndex<1>>]>;
 
 //--- Immediate-16 Arithmetic ---
 
-// SFPMULI: arg 0 is register (dest/source), args 1-2 are immediates
+// SFPMULI: arg 0 is register; imm16 can be RUNTIME; mod1 is compile-time
 def int_riscv_tt_sfpmuli
     : Intrinsic<[llvm_i32_ty],
                 [llvm_i32_ty, llvm_i32_ty, llvm_i32_ty], // lreg_dest, imm16, mod1
                 [IntrNoMem, IntrHasSideEffects,
-                 ImmArg<ArgIndex<1>>, ImmArg<ArgIndex<2>>]>;
+                 ImmArg<ArgIndex<2>>]>;
 
-// SFPADDI: arg 0 is register, args 1-2 are immediates
+// SFPADDI: same pattern as SFPMULI
 def int_riscv_tt_sfpaddi
     : Intrinsic<[llvm_i32_ty],
                 [llvm_i32_ty, llvm_i32_ty, llvm_i32_ty], // lreg_dest, imm16, mod1
                 [IntrNoMem, IntrHasSideEffects,
-                 ImmArg<ArgIndex<1>>, ImmArg<ArgIndex<2>>]>;
+                 ImmArg<ArgIndex<2>>]>;
 
 //--- Standard Unary Arithmetic ---
 // Pattern: arg 0 = register (lreg_c), arg 1 = imm12, arg 2 = mod1 (imm4)
@@ -315,12 +319,12 @@ def int_riscv_tt_sfpadd_lv
                 [llvm_i32_ty, llvm_i32_ty, llvm_i32_ty, llvm_i32_ty, llvm_i32_ty],
                 [IntrNoMem, IntrHasSideEffects, ImmArg<ArgIndex<4>>]>;
 
-// _lv load: (live_val, mod0, addr_mode, addr) — imm at 1,2,3
+// _lv load: (live_val, mod0, addr_mode, addr) — mod0/addr_mode imm, addr runtime
 def int_riscv_tt_sfpload_lv
     : Intrinsic<[llvm_i32_ty],
                 [llvm_i32_ty, llvm_i32_ty, llvm_i32_ty, llvm_i32_ty],
                 [IntrReadMem, IntrHasSideEffects,
-                 ImmArg<ArgIndex<1>>, ImmArg<ArgIndex<2>>, ImmArg<ArgIndex<3>>]>;
+                 ImmArg<ArgIndex<1>>, ImmArg<ArgIndex<2>>]>;
 
 // _lv unary variants: (live_val, lreg_c, imm12, mod1) — imm at 2,3
 def int_riscv_tt_sfpcast_lv

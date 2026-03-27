@@ -155,15 +155,8 @@ def : Pat<(int_riscv_tt_sfpdivp2_lv i32:$live, i32:$src, timm:$imm, timm:$mod1),
 
 let Predicates = [HasXttSFPU, HasXttSFPUBH] in {
 
-// BH Load (3-bit addr_mode, 13-bit addr)
-def : Pat<(int_riscv_tt_sfpload timm:$mod0, timm:$addr_mode, timm:$addr),
-          (SFPLOAD_BH uimm4_sfpu:$mod0, uimm3_sfpu:$addr_mode, uimm13_sfpu:$addr)>;
-def : Pat<(int_riscv_tt_sfpload_lv i32:$live, timm:$mod0, timm:$addr_mode, timm:$addr),
-          (SFPLOAD_BH_LV SFPURegs:$live, uimm4_sfpu:$mod0,
-                         uimm3_sfpu:$addr_mode, uimm13_sfpu:$addr)>;
-
-// SFPSTORE/SFPLOADMACRO: Needs custom C++ lowering (IntrWriteMem/IntrHasSideEffects
-// → INTRINSIC_VOID chain node doesn't match Pat<> due to mayStore flag conflict).
+// BH Load/Store/LoadMacro: Custom ISel in RISCVISelDAGToDAG.cpp
+// (addr/imm16 args can be runtime values — not TargetConstant)
 
 // BH-only instructions
 // SFPGT/SFPLE: $lreg_dest is now uimm4 (immediate), pass 0
@@ -190,9 +183,19 @@ def : Pat<(int_riscv_tt_sfpmul24_lv i32:$live, i32:$a, i32:$b, i32:$c, timm:$mod
 
 let Predicates = [HasXttSFPU, HasXttSFPUWH] in {
 
-// WH Load/Store (2-bit addr_mode, 14-bit addr)
-def : Pat<(int_riscv_tt_sfpload timm:$mod0, timm:$addr_mode, timm:$addr),
-          (SFPLOAD_WH uimm4_sfpu:$mod0, uimm2_sfpu:$addr_mode, uimm14_sfpu:$addr)>;
-// WH SFPSTORE/SFPLOADMACRO: same custom lowering needed as BH.
+// WH Load/Store/LoadMacro: Custom ISel in RISCVISelDAGToDAG.cpp
+
+// WH C-010: 3-operand arithmetic with dst=src_a constraint.
+// These override the generic SFPMAD/SFPMUL/SFPADD patterns from the base
+// section. WH predicates are more specific so they take priority.
+def : Pat<(int_riscv_tt_sfpmad i32:$a, i32:$b, i32:$c, timm:$mod1),
+          (SFPMAD_WH SFPUAllRegs:$a, SFPUAllRegs:$b,
+                     SFPUAllRegs:$c, uimm4_sfpu:$mod1)>;
+def : Pat<(int_riscv_tt_sfpmul i32:$a, i32:$b, i32:$c, timm:$mod1),
+          (SFPMUL_WH SFPUAllRegs:$a, SFPUAllRegs:$b,
+                     SFPUAllRegs:$c, uimm4_sfpu:$mod1)>;
+def : Pat<(int_riscv_tt_sfpadd i32:$a, i32:$b, i32:$c, timm:$mod1),
+          (SFPADD_WH SFPUAllRegs:$a, SFPUAllRegs:$b,
+                     SFPUAllRegs:$c, uimm4_sfpu:$mod1)>;
 
 } // Predicates = [HasXttSFPU, HasXttSFPUWH]

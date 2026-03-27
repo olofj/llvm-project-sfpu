@@ -1596,6 +1596,119 @@ void RISCVDAGToDAGISel::Select(SDNode *Node) {
       // By default we do not custom select any intrinsic.
     default:
       break;
+
+    // --- Tenstorrent SFPU value-producing intrinsics ---
+    // These need custom ISel because their register operands are passed as
+    // i32 constants (register indices like 9 for L9), but the MachineInstr
+    // needs actual SFPUAllRegs physical register references.
+    //
+    // Helper: convert i32 constant to SFPU LReg physical register.
+    // SFPU L-registers are L0-L16 (RISCV::L0 + index).
+#define SFPU_LREG(idx) CurDAG->getRegister(RISCV::L0 + (idx), MVT::i32)
+#define SFPU_GET_REG_OR_CONST(op) \
+    (isa<ConstantSDNode>(op) \
+     ? SFPU_LREG(cast<ConstantSDNode>(op)->getZExtValue()) \
+     : op)
+
+    case Intrinsic::riscv_tt_sfpmad:
+    case Intrinsic::riscv_tt_sfpmul:
+    case Intrinsic::riscv_tt_sfpadd: {
+      // 3-Op: (src_a, src_b, src_c, mod1) → SFPMAD/SFPMUL/SFPADD
+      SDValue SrcA = SFPU_GET_REG_OR_CONST(Node->getOperand(1));
+      SDValue SrcB = SFPU_GET_REG_OR_CONST(Node->getOperand(2));
+      SDValue SrcC = SFPU_GET_REG_OR_CONST(Node->getOperand(3));
+      SDValue Mod1 = CurDAG->getTargetConstant(
+          Node->getConstantOperandVal(4), DL, MVT::i32);
+      unsigned Opc;
+      if (IntNo == Intrinsic::riscv_tt_sfpmad)
+        Opc = RISCV::SFPMAD;
+      else if (IntNo == Intrinsic::riscv_tt_sfpmul)
+        Opc = RISCV::SFPMUL;
+      else
+        Opc = RISCV::SFPADD;
+      // On WH, use constrained variants
+      if (Subtarget->hasVendorXttSFPUWH()) {
+        if (IntNo == Intrinsic::riscv_tt_sfpmad)
+          Opc = RISCV::SFPMAD_WH;
+        else if (IntNo == Intrinsic::riscv_tt_sfpmul)
+          Opc = RISCV::SFPMUL_WH;
+        else
+          Opc = RISCV::SFPADD_WH;
+      }
+      MachineSDNode *Res = CurDAG->getMachineNode(
+          Opc, DL, MVT::i32, {SrcA, SrcB, SrcC, Mod1});
+      ReplaceNode(Node, Res);
+      return;
+    }
+
+    case Intrinsic::riscv_tt_sfpmov: {
+      // Unary: (src, imm12, mod1)
+      SDValue Src = SFPU_GET_REG_OR_CONST(Node->getOperand(1));
+      SDValue Imm = CurDAG->getTargetConstant(
+          Node->getConstantOperandVal(2), DL, MVT::i32);
+      SDValue Mod1 = CurDAG->getTargetConstant(
+          Node->getConstantOperandVal(3), DL, MVT::i32);
+      MachineSDNode *Res = CurDAG->getMachineNode(
+          RISCV::SFPMOV, DL, MVT::i32, {Imm, Src, Mod1});
+      ReplaceNode(Node, Res);
+      return;
+    }
+
+    case Intrinsic::riscv_tt_sfpabs:
+    case Intrinsic::riscv_tt_sfpexexp:
+    case Intrinsic::riscv_tt_sfpexman:
+    case Intrinsic::riscv_tt_sfpdivp2:
+    case Intrinsic::riscv_tt_sfpcast:
+    case Intrinsic::riscv_tt_sfplz:
+    case Intrinsic::riscv_tt_sfpsetexp:
+    case Intrinsic::riscv_tt_sfpsetman:
+    case Intrinsic::riscv_tt_sfpsetsgn:
+    case Intrinsic::riscv_tt_sfpnot: {
+      // Standard Unary: (src, imm12, mod1) → SFPUUnaryReg
+      SDValue Src = SFPU_GET_REG_OR_CONST(Node->getOperand(1));
+      SDValue Imm = CurDAG->getTargetConstant(
+          Node->getConstantOperandVal(2), DL, MVT::i32);
+      SDValue Mod1 = CurDAG->getTargetConstant(
+          Node->getConstantOperandVal(3), DL, MVT::i32);
+      unsigned Opc;
+      switch (IntNo) {
+      case Intrinsic::riscv_tt_sfpabs:    Opc = RISCV::SFPABS; break;
+      case Intrinsic::riscv_tt_sfpexexp:  Opc = RISCV::SFPEXEXP; break;
+      case Intrinsic::riscv_tt_sfpexman:  Opc = RISCV::SFPEXMAN; break;
+      case Intrinsic::riscv_tt_sfpdivp2:  Opc = RISCV::SFPDIVP2; break;
+      case Intrinsic::riscv_tt_sfpcast:   Opc = RISCV::SFPCAST; break;
+      case Intrinsic::riscv_tt_sfplz:     Opc = RISCV::SFPLZ; break;
+      case Intrinsic::riscv_tt_sfpsetexp: Opc = RISCV::SFPSETEXP; break;
+      case Intrinsic::riscv_tt_sfpsetman: Opc = RISCV::SFPSETMAN; break;
+      case Intrinsic::riscv_tt_sfpsetsgn: Opc = RISCV::SFPSETSGN; break;
+      case Intrinsic::riscv_tt_sfpnot:    Opc = RISCV::SFPNOT; break;
+      default: llvm_unreachable("unhandled sfpu unary");
+      }
+      MachineSDNode *Res = CurDAG->getMachineNode(
+          Opc, DL, MVT::i32, {Imm, Src, Mod1});
+      ReplaceNode(Node, Res);
+      return;
+    }
+
+    case Intrinsic::riscv_tt_sfpiadd:
+    case Intrinsic::riscv_tt_sfpshft: {
+      // Unary with wider imm: (src, imm12, mod1)
+      SDValue Src = SFPU_GET_REG_OR_CONST(Node->getOperand(1));
+      SDValue Imm = CurDAG->getTargetConstant(
+          Node->getConstantOperandVal(2), DL, MVT::i32);
+      SDValue Mod1 = CurDAG->getTargetConstant(
+          Node->getConstantOperandVal(3), DL, MVT::i32);
+      unsigned Opc = (IntNo == Intrinsic::riscv_tt_sfpiadd)
+                         ? RISCV::SFPIADD : RISCV::SFPSHFT;
+      MachineSDNode *Res = CurDAG->getMachineNode(
+          Opc, DL, MVT::i32, {Imm, Src, Mod1});
+      ReplaceNode(Node, Res);
+      return;
+    }
+
+#undef SFPU_LREG
+#undef SFPU_GET_REG_OR_CONST
+
     case Intrinsic::riscv_vmsgeu:
     case Intrinsic::riscv_vmsge: {
       SDValue Src1 = Node->getOperand(1);
@@ -1780,6 +1893,202 @@ void RISCVDAGToDAGISel::Select(SDNode *Node) {
       // By default we do not custom select any intrinsic.
     default:
       break;
+
+    // Tenstorrent SFPU load — produces value in SFPU register class.
+    // Must use custom ISel to avoid GPR↔SFPU copy.
+    case Intrinsic::riscv_tt_sfpload: {
+      // sfpload(mod0, addr_mode, addr) → result in SFPURegs
+      // mod0 and addr_mode are always constants (ImmArg); addr can be runtime
+      SDValue Chain = Node->getOperand(0);
+      SDValue Mod0 = CurDAG->getTargetConstant(
+          Node->getConstantOperandVal(2), DL, MVT::i32);
+      SDValue AddrMode = CurDAG->getTargetConstant(
+          Node->getConstantOperandVal(3), DL, MVT::i32);
+      SDValue Addr = Node->getOperand(4);
+      if (auto *C = dyn_cast<ConstantSDNode>(Addr))
+        Addr = CurDAG->getTargetConstant(C->getZExtValue(), DL, MVT::i32);
+      unsigned Opc = Subtarget->hasVendorXttSFPUBH()
+                         ? RISCV::SFPLOAD_BH
+                         : RISCV::SFPLOAD_WH;
+      MachineSDNode *Load = CurDAG->getMachineNode(
+          Opc, DL, MVT::i32, MVT::Other, {Mod0, AddrMode, Addr, Chain});
+      ReplaceNode(Node, Load);
+      return;
+    }
+
+    case Intrinsic::riscv_tt_sfploadi: {
+      // sfploadi(mod0, imm16) → result in SFPURegs
+      // mod0 is always constant; imm16 can be runtime (e.g. __f32asui)
+      SDValue Chain = Node->getOperand(0);
+      SDValue Mod0 = CurDAG->getTargetConstant(
+          Node->getConstantOperandVal(2), DL, MVT::i32);
+      SDValue Imm16 = Node->getOperand(3);
+      if (auto *C = dyn_cast<ConstantSDNode>(Imm16))
+        Imm16 = CurDAG->getTargetConstant(C->getZExtValue(), DL, MVT::i32);
+      MachineSDNode *Load = CurDAG->getMachineNode(
+          RISCV::SFPLOADI, DL, MVT::i32, MVT::Other, {Mod0, Imm16, Chain});
+      ReplaceNode(Node, Load);
+      return;
+    }
+
+    // SFPU 3-Operand arithmetic (W_CHAIN due to IntrHasSideEffects)
+    case Intrinsic::riscv_tt_sfpmad:
+    case Intrinsic::riscv_tt_sfpmul:
+    case Intrinsic::riscv_tt_sfpadd: {
+      SDValue Chain = Node->getOperand(0);
+      // Operands: chain, intno, src_a, src_b, src_c, mod1
+      SDValue SrcA = Node->getOperand(2);
+      SDValue SrcB = Node->getOperand(3);
+      SDValue SrcC = Node->getOperand(4);
+      SDValue Mod1 = CurDAG->getTargetConstant(
+          Node->getConstantOperandVal(5), DL, MVT::i32);
+      // Convert constant register indices to physical register refs
+      if (auto *C = dyn_cast<ConstantSDNode>(SrcA))
+        SrcA = CurDAG->getRegister(RISCV::L0 + C->getZExtValue(), MVT::i32);
+      if (auto *C = dyn_cast<ConstantSDNode>(SrcB))
+        SrcB = CurDAG->getRegister(RISCV::L0 + C->getZExtValue(), MVT::i32);
+      if (auto *C = dyn_cast<ConstantSDNode>(SrcC))
+        SrcC = CurDAG->getRegister(RISCV::L0 + C->getZExtValue(), MVT::i32);
+      // Use generic (unconstrained) opcodes for custom ISel — the physical
+      // register placement is already correct. The _WH constrained variants
+      // are for Pat<>-based selection where the RA needs tying hints.
+      // Custom ISel bypasses the two-address pass issue with physical regs.
+      unsigned Opc;
+      if (IntNo == Intrinsic::riscv_tt_sfpmad)
+        Opc = RISCV::SFPMAD;
+      else if (IntNo == Intrinsic::riscv_tt_sfpmul)
+        Opc = RISCV::SFPMUL;
+      else
+        Opc = RISCV::SFPADD;
+      MachineSDNode *Res = CurDAG->getMachineNode(
+          Opc, DL, MVT::i32, MVT::Other, {SrcA, SrcB, SrcC, Mod1, Chain});
+      ReplaceNode(Node, Res);
+      return;
+    }
+
+    // SFPU Unary value-producing intrinsics (W_CHAIN due to IntrHasSideEffects)
+    case Intrinsic::riscv_tt_sfpmov:
+    case Intrinsic::riscv_tt_sfpabs:
+    case Intrinsic::riscv_tt_sfpexexp:
+    case Intrinsic::riscv_tt_sfpexman:
+    case Intrinsic::riscv_tt_sfpdivp2:
+    case Intrinsic::riscv_tt_sfpcast:
+    case Intrinsic::riscv_tt_sfplz:
+    case Intrinsic::riscv_tt_sfpsetexp:
+    case Intrinsic::riscv_tt_sfpsetman:
+    case Intrinsic::riscv_tt_sfpsetsgn:
+    case Intrinsic::riscv_tt_sfpnot:
+    case Intrinsic::riscv_tt_sfpiadd:
+    case Intrinsic::riscv_tt_sfpshft: {
+      SDValue Chain = Node->getOperand(0);
+      // Operands: chain, intno, src, imm12, mod1
+      SDValue Src = Node->getOperand(2);
+      SDValue Imm = CurDAG->getTargetConstant(
+          Node->getConstantOperandVal(3), DL, MVT::i32);
+      SDValue Mod1 = CurDAG->getTargetConstant(
+          Node->getConstantOperandVal(4), DL, MVT::i32);
+      if (auto *C = dyn_cast<ConstantSDNode>(Src))
+        Src = CurDAG->getRegister(RISCV::L0 + C->getZExtValue(), MVT::i32);
+      unsigned Opc;
+      switch (IntNo) {
+      case Intrinsic::riscv_tt_sfpmov:    Opc = RISCV::SFPMOV; break;
+      case Intrinsic::riscv_tt_sfpabs:    Opc = RISCV::SFPABS; break;
+      case Intrinsic::riscv_tt_sfpexexp:  Opc = RISCV::SFPEXEXP; break;
+      case Intrinsic::riscv_tt_sfpexman:  Opc = RISCV::SFPEXMAN; break;
+      case Intrinsic::riscv_tt_sfpdivp2:  Opc = RISCV::SFPDIVP2; break;
+      case Intrinsic::riscv_tt_sfpcast:   Opc = RISCV::SFPCAST; break;
+      case Intrinsic::riscv_tt_sfplz:     Opc = RISCV::SFPLZ; break;
+      case Intrinsic::riscv_tt_sfpsetexp: Opc = RISCV::SFPSETEXP; break;
+      case Intrinsic::riscv_tt_sfpsetman: Opc = RISCV::SFPSETMAN; break;
+      case Intrinsic::riscv_tt_sfpsetsgn: Opc = RISCV::SFPSETSGN; break;
+      case Intrinsic::riscv_tt_sfpnot:    Opc = RISCV::SFPNOT; break;
+      case Intrinsic::riscv_tt_sfpiadd:   Opc = RISCV::SFPIADD; break;
+      case Intrinsic::riscv_tt_sfpshft:   Opc = RISCV::SFPSHFT; break;
+      default: llvm_unreachable("unhandled sfpu unary");
+      }
+      MachineSDNode *Res = CurDAG->getMachineNode(
+          Opc, DL, MVT::i32, MVT::Other, {Imm, Src, Mod1, Chain});
+      ReplaceNode(Node, Res);
+      return;
+    }
+
+    // SFPU Immediate-16 arithmetic: (src_reg, imm16, mod1)
+    // Uses Pseudo variants with tied src/dest for RA.
+    // SFPMULI/SFPADDI are read-modify-write: dest is also the source.
+    case Intrinsic::riscv_tt_sfpmuli:
+    case Intrinsic::riscv_tt_sfpaddi: {
+      SDValue Chain = Node->getOperand(0);
+      SDValue Src = Node->getOperand(2);
+      SDValue Imm16 = CurDAG->getTargetConstant(
+          Node->getConstantOperandVal(3), DL, MVT::i32);
+      SDValue Mod1 = CurDAG->getTargetConstant(
+          Node->getConstantOperandVal(4), DL, MVT::i32);
+      if (auto *C = dyn_cast<ConstantSDNode>(Src))
+        Src = CurDAG->getRegister(RISCV::L0 + C->getZExtValue(), MVT::i32);
+      // Use non-pseudo (dest-only) form: just (imm16, mod1)
+      // The RA will place the result in an available LReg.
+      unsigned Opc = (IntNo == Intrinsic::riscv_tt_sfpmuli)
+                         ? RISCV::SFPMULI : RISCV::SFPADDI;
+      MachineSDNode *Res = CurDAG->getMachineNode(
+          Opc, DL, MVT::i32, MVT::Other, {Imm16, Mod1, Chain});
+      ReplaceNode(Node, Res);
+      return;
+    }
+
+    // SFPU logic/swap/shift2: (src, imm12, mod1) — same as standard unary
+    case Intrinsic::riscv_tt_sfpand:
+    case Intrinsic::riscv_tt_sfpor:
+    case Intrinsic::riscv_tt_sfpswap:
+    case Intrinsic::riscv_tt_sfpshft2: {
+      SDValue Chain = Node->getOperand(0);
+      SDValue Src = Node->getOperand(2);
+      SDValue Imm = CurDAG->getTargetConstant(
+          Node->getConstantOperandVal(3), DL, MVT::i32);
+      SDValue Mod1 = CurDAG->getTargetConstant(
+          Node->getConstantOperandVal(4), DL, MVT::i32);
+      if (auto *C = dyn_cast<ConstantSDNode>(Src))
+        Src = CurDAG->getRegister(RISCV::L0 + C->getZExtValue(), MVT::i32);
+      unsigned Opc;
+      switch (IntNo) {
+      case Intrinsic::riscv_tt_sfpand:   Opc = RISCV::SFPAND; break;
+      case Intrinsic::riscv_tt_sfpor:    Opc = RISCV::SFPOR; break;
+      case Intrinsic::riscv_tt_sfpswap:  Opc = RISCV::SFPSWAP; break;
+      case Intrinsic::riscv_tt_sfpshft2: Opc = RISCV::SFPSHFT2; break;
+      default: llvm_unreachable("unhandled sfpu logic");
+      }
+      MachineSDNode *Res = CurDAG->getMachineNode(
+          Opc, DL, MVT::i32, MVT::Other, {Imm, Src, Mod1, Chain});
+      ReplaceNode(Node, Res);
+      return;
+    }
+
+    // SFPLUTFP32: (src_reg, mod1) — 2 args only
+    case Intrinsic::riscv_tt_sfplutfp32: {
+      SDValue Chain = Node->getOperand(0);
+      SDValue Src = Node->getOperand(2);
+      SDValue Mod1 = CurDAG->getTargetConstant(
+          Node->getConstantOperandVal(3), DL, MVT::i32);
+      if (auto *C = dyn_cast<ConstantSDNode>(Src))
+        Src = CurDAG->getRegister(RISCV::L0 + C->getZExtValue(), MVT::i32);
+      MachineSDNode *Res = CurDAG->getMachineNode(
+          RISCV::SFPLUTFP32, DL, MVT::i32, MVT::Other, {Src, Mod1, Chain});
+      ReplaceNode(Node, Res);
+      return;
+    }
+
+    // SFPLUT: (mod0, dest_reg_addr) — 2 imm args
+    case Intrinsic::riscv_tt_sfplut: {
+      SDValue Chain = Node->getOperand(0);
+      SDValue Mod0 = CurDAG->getTargetConstant(
+          Node->getConstantOperandVal(2), DL, MVT::i32);
+      SDValue Addr = CurDAG->getTargetConstant(
+          Node->getConstantOperandVal(3), DL, MVT::i32);
+      MachineSDNode *Res = CurDAG->getMachineNode(
+          RISCV::SFPLUT, DL, MVT::i32, MVT::Other, {Mod0, Addr, Chain});
+      ReplaceNode(Node, Res);
+      return;
+    }
+
     case Intrinsic::riscv_vlseg2:
     case Intrinsic::riscv_vlseg3:
     case Intrinsic::riscv_vlseg4:
@@ -2158,12 +2467,14 @@ void RISCVDAGToDAGISel::Select(SDNode *Node) {
     // (mayStore/hasSideEffects flag mismatch with base class).
     case Intrinsic::riscv_tt_sfpstore: {
       // sfpstore(lreg_src, mod0, addr_mode, addr)
-      // → SFPSTORE_BH or SFPSTORE_WH depending on subtarget
+      // mod0/addr_mode are ImmArg (TargetConstant); addr can be runtime
       SDValue Chain = Node->getOperand(0);
-      SDValue Src = Node->getOperand(2);      // lreg_src (register)
-      SDValue Mod0 = Node->getOperand(3);     // mod0 (TargetConstant)
-      SDValue AddrMode = Node->getOperand(4); // addr_mode (TargetConstant)
-      SDValue Addr = Node->getOperand(5);     // addr (TargetConstant)
+      SDValue Src = Node->getOperand(2);
+      SDValue Mod0 = Node->getOperand(3);
+      SDValue AddrMode = Node->getOperand(4);
+      SDValue Addr = Node->getOperand(5);
+      if (auto *C = dyn_cast<ConstantSDNode>(Addr))
+        Addr = CurDAG->getTargetConstant(C->getZExtValue(), DL, MVT::i32);
       unsigned Opc = Subtarget->hasVendorXttSFPUBH()
                          ? RISCV::SFPSTORE_BH
                          : RISCV::SFPSTORE_WH;
