@@ -6,7 +6,8 @@
 // Errata handled:
 //   E-001: WH Read-After-Write Hazard (byte/half store before word load)
 //   E-002: WH_B0 SFPSHFT2 Shift-Right Zero-Fill Bug
-//   E-004: SFPU Pipeline Hazards (NOP insertion for WH, no-op for BH)
+//   E-004: SFPU Pipeline Hazards (NOP insertion for WH; selective for BH errata)
+//   E-004a: BH Scoreboard Errata (NOP for 10 specific instruction combinations)
 //   E-005: SFPSTORE Source Register Restriction (L12-L15)
 //   E-012: ebreak Erratum (8 NOPs required after ebreak)
 //
@@ -51,6 +52,8 @@ private:
 
   bool isSFPU2Cycle(const MachineInstr &MI) const;
   bool isSFPUInstr(const MachineInstr &MI) const;
+  bool isBHScoreboardErrata(const MachineInstr &Consumer,
+                            const MachineInstr &Producer) const;
 };
 
 } // end anonymous namespace
@@ -135,6 +138,115 @@ bool RISCVXttSFPUErrata::isSFPUInstr(const MachineInstr &MI) const {
   }
 }
 
+/// E-004a: Check if Consumer is a BH scoreboard errata case that needs a NOP
+/// after a 2-cycle Producer instruction.
+///
+/// BH's hardware scoreboard has bugs in dependency tracking for ~10 instruction
+/// combinations. For these, the scoreboard fails to detect that the consumer
+/// reads a register written by the producer, so no stall occurs and we get
+/// wrong results. A software NOP must be inserted.
+///
+/// Source: tt-metal #14591, ttsim-analysis/ERRATA.md E-004a.
+///
+/// Conservative approach: if the consumer opcode is in the errata set AND any
+/// register defined by the producer is used by the consumer, insert a NOP.
+bool RISCVXttSFPUErrata::isBHScoreboardErrata(
+    const MachineInstr &Consumer, const MachineInstr &Producer) const {
+
+  // mod1 constants from sfpi_constants.h
+  enum {
+    SFPSWAP_MOD1_SWAP = 0,
+    SFPSHFT2_MOD1_SUBVEC_SHFLROR1_AND_COPY4 = 2,
+    SFPSHFT2_MOD1_SUBVEC_SHFLROR1 = 3,
+    SFPSHFT2_MOD1_SUBVEC_SHFLSHR1 = 4,
+    SFPSHFT2_MOD1_SHFT_LREG = 5,
+    SFPSHFT2_MOD1_SHFT_IMM = 6,
+  };
+
+  unsigned Opc = Consumer.getOpcode();
+
+  // Quick reject: not an errata-affected opcode
+  bool IsErrataOpcode = false;
+  switch (Opc) {
+  case RISCV::SFPIADD:     // Errata #3: scoreboard misses VD read
+  case RISCV::SFPSHFT:     // Errata #4: scoreboard misses VD read
+  case RISCV::SFPCONFIG:   // Errata #5: scoreboard misses L0 read
+  case RISCV::SFPAND:      // Errata #1: USE_VB mode misses VB read
+  case RISCV::SFPOR:       // Errata #2: USE_VB mode misses VB read
+  case RISCV::SFPSWAP:     // Errata #6: non-SWAP modes miss 1st-cycle reads
+  case RISCV::SFPSHFT2:    // Errata #7/#8: shuffle/shift modes
+  case RISCV::SFPLUT:      // Errata #9: suspected
+  case RISCV::SFPLUTFP32:  // Errata #10: suspected
+    IsErrataOpcode = true;
+    break;
+  default:
+    return false;
+  }
+
+  // For mode-dependent errata, check the mod1 value to see if this specific
+  // mode is affected. Get mod1 from the last explicit operand.
+  auto getMod1 = [](const MachineInstr &MI) -> int {
+    unsigned NumOps = MI.getNumExplicitOperands();
+    if (NumOps == 0) return -1;
+    const MachineOperand &LastOp = MI.getOperand(NumOps - 1);
+    return LastOp.isImm() ? LastOp.getImm() : -1;
+  };
+
+  switch (Opc) {
+  case RISCV::SFPAND:
+  case RISCV::SFPOR: {
+    // Only affected when MOD1_USE_VB (bit 0) is set.
+    // Currently neither GCC nor LLVM generates this mode, but guard for future.
+    int Mod1 = getMod1(Consumer);
+    if (Mod1 < 0 || !(Mod1 & 1))
+      return false;  // Default mode: scoreboard tracks correctly
+    break;
+  }
+  case RISCV::SFPSWAP: {
+    // Only affected in non-SWAP modes (mod1 != 0).
+    int Mod1 = getMod1(Consumer);
+    if (Mod1 == SFPSWAP_MOD1_SWAP)
+      return false;  // Plain SWAP: scoreboard works
+    break;
+  }
+  case RISCV::SFPSHFT2: {
+    // Modes 2-6 are affected. Modes 0-1 are fine (COPY4, CHAINED_COPY4).
+    int Mod1 = getMod1(Consumer);
+    if (Mod1 < SFPSHFT2_MOD1_SUBVEC_SHFLROR1_AND_COPY4)
+      return false;  // Modes 0,1: scoreboard works
+    break;
+  }
+  case RISCV::SFPIADD:
+  case RISCV::SFPSHFT:
+  case RISCV::SFPCONFIG:
+  case RISCV::SFPLUT:
+  case RISCV::SFPLUTFP32:
+    // Always affected (no mode-dependent check)
+    break;
+  default:
+    return false;
+  }
+
+  // Check if there's an actual register conflict: does the producer define
+  // a register that the consumer uses?
+  for (const MachineOperand &Def : Producer.defs()) {
+    if (!Def.isReg())
+      continue;
+    Register DefReg = Def.getReg();
+
+    // Special case: SFPCONFIG reads L0 implicitly (errata #5)
+    if (Opc == RISCV::SFPCONFIG && DefReg == RISCV::L0)
+      return true;
+
+    for (const MachineOperand &Use : Consumer.uses()) {
+      if (Use.isReg() && Use.getReg() == DefReg)
+        return true;
+    }
+  }
+
+  return false;
+}
+
 /// E-004: Insert SFPNOP after SFPU instructions that need pipeline delays.
 ///
 /// Validated against sfpi-gcc/gcc/config/riscv/tt/rtl-rvtt-schedule.cc:
@@ -198,8 +310,13 @@ bool RISCVXttSFPUErrata::handleE004_PipelineHazards(MachineFunction &MF) {
               break;
           }
         }
+      } else {
+        // Dynamic delay on BH: scoreboard handles MOST cases, but E-004a
+        // errata cases need NOP. See ERRATA.md E-004a, tt-metal #14591.
+        if (NextMI != MBBE && isSFPUInstr(*NextMI) &&
+            isBHScoreboardErrata(*NextMI, MI))
+          NeedNop = true;
       }
-      // Dynamic delay on BH: hardware scoreboard handles it — skip.
 
       if (NeedNop) {
         BuildMI(MBB, NextMI, MI.getDebugLoc(), TII->get(RISCV::SFPNOP));
@@ -268,10 +385,10 @@ bool RISCVXttSFPUErrata::handleE002_SFPSHFT2ZeroFill(MachineFunction &MF) {
 
   bool Changed = false;
 
-  // SHFLSHR1 mode is encoded in mod1 field
-  // TODO: Define the exact mod1 value for SHFLSHR1 from C-020
-  const unsigned SHFLSHR1_MOD1 = 2;  // Placeholder — verify from sfpi-gcc
-  const unsigned SHFLROR1_MOD1 = 1;  // Placeholder — verify from sfpi-gcc
+  // SFPSHFT2 mod1 values from sfpi-gcc/gcc/config/riscv/tt/rvtt-protos.h:213-219
+  // and ttsim-analysis/ERRATA.md C-020 (SFPSHFT2 Modifiers table)
+  const unsigned SHFLSHR1_MOD1 = 4;  // SUBVEC_SHFLSHR1 (shift right 1, zero-fill)
+  const unsigned SHFLROR1_MOD1 = 3;  // SUBVEC_SHFLROR1 (rotate right 1)
 
   for (MachineBasicBlock &MBB : MF) {
     for (auto MBBI = MBB.begin(), MBBE = MBB.end(); MBBI != MBBE; ++MBBI) {
