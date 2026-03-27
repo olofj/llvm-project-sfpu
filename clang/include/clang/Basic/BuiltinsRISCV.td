@@ -210,7 +210,7 @@ def tt_sfptransp    : RISCVBuiltin<"unsigned int(unsigned int, unsigned int, uns
 def tt_sfpxor       : RISCVBuiltin<"unsigned int(unsigned int, unsigned int, unsigned int)">;
 
 // --- Rounding / Cast ---
-def tt_sfpstochrnd  : RISCVBuiltin<"unsigned int(unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int)">;
+def tt_sfpstochrnd  : RISCVBuiltin<"unsigned int(unsigned int, unsigned int, unsigned int, unsigned int, unsigned int)">;
 def tt_sfpcast      : RISCVBuiltin<"unsigned int(unsigned int, unsigned int, unsigned int)">;
 def tt_sfpcast_lv   : RISCVBuiltin<"unsigned int(unsigned int, unsigned int, unsigned int, unsigned int)">;
 
@@ -232,6 +232,19 @@ def tt_sfparecip    : RISCVBuiltin<"unsigned int(unsigned int, unsigned int, uns
 def tt_sfparecip_lv : RISCVBuiltin<"unsigned int(unsigned int, unsigned int, unsigned int, unsigned int)">;
 def tt_sfpgt        : RISCVBuiltin<"void(unsigned int, unsigned int, unsigned int)">;
 def tt_sfple        : RISCVBuiltin<"void(unsigned int, unsigned int, unsigned int)">;
-} // Features = "xttsfpu-bh"
+} // Features = "xttsfpubh"
+
+// --- GCC compatibility builtins ---
+// sfpi_builtins.h's self-referencing macros expand to 6-arg forms of these
+// builtins (with instrn_buffer and padding args). Clang needs actual builtins
+// for these expanded forms. CGBuiltin.cpp maps them to the standard intrinsics.
+let Features = "xttsfpu" in {
+// __builtin_rvtt_sfpxicmps(buf, v, i, x1, x2, mod1) — 6-arg form
+def rvtt_sfpxicmps  : RISCVBuiltin<"void(unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int)">;
+// __builtin_rvtt_sfpshft_i(buf, dst, imm12, x1, x2, mod1) — 6-arg form
+def rvtt_sfpshft_i  : RISCVBuiltin<"unsigned int(unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int)">;
+// __builtin_rvtt_synth_opcode(opcode) — raw opcode emission
+def rvtt_synth_opcode : RISCVBuiltin<"void(_Constant unsigned int)">;
+} // Features = "xttsfpu"
 
 } // Attributes = [NoThrow]

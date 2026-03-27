@@ -22194,6 +22194,27 @@ Value *CodeGenFunction::EmitRISCVBuiltinExpr(unsigned BuiltinID,
   case RISCV::BI__builtin_riscv_tt_sfple:
     ID = Intrinsic::riscv_tt_sfple; break;
 
+  // GCC-compat 6-arg builtins from sfpi_builtins.h self-referencing macros.
+  // Drop args 0 (instrn_buffer), 3 (x1), 4 (x2) and forward 1,2,5.
+  case RISCV::BI__builtin_riscv_rvtt_sfpxicmps: {
+    // sfpxicmps(buf, v, i, x1, x2, mod1) → sfpsetcc(v, i, mod1)
+    llvm::Function *F = CGM.getIntrinsic(Intrinsic::riscv_tt_sfpsetcc);
+    return Builder.CreateCall(F, {Ops[1], Ops[2], Ops[5]}, "");
+  }
+  case RISCV::BI__builtin_riscv_rvtt_sfpshft_i: {
+    // sfpshft_i(buf, dst, imm12, x1, x2, mod1) → sfpshft(dst, imm12, mod1)
+    llvm::Function *F = CGM.getIntrinsic(Intrinsic::riscv_tt_sfpshft);
+    return Builder.CreateCall(F, {Ops[1], Ops[2], Ops[5]}, "");
+  }
+  case RISCV::BI__builtin_riscv_rvtt_synth_opcode: {
+    // synth_opcode(imm) → inline asm ".word $0"
+    llvm::InlineAsm *IA = llvm::InlineAsm::get(
+        llvm::FunctionType::get(llvm::Type::getVoidTy(getLLVMContext()),
+                                {llvm::Type::getInt32Ty(getLLVMContext())}, false),
+        ".word $0", "i", /*hasSideEffects=*/true);
+    return Builder.CreateCall(IA, {Ops[0]});
+  }
+
   // Vector builtins are handled from here.
 #include "clang/Basic/riscv_vector_builtin_cg.inc"
   // SiFive Vector builtins are handled from here.
