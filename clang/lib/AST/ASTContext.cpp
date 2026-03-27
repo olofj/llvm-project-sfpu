@@ -2217,6 +2217,11 @@ TypeInfo ASTContext::getTypeInfoImpl(const Type *T) const {
     Align = Size;                                                              \
     break;
 #include "clang/Basic/PPCTypes.def"
+  // Tenstorrent SFPU: __xtt_vector is a fixed 32-bit type (not scalable)
+  case BuiltinType::XttVector:
+    Width = 32;
+    Align = 32;
+    break;
 #define RVV_VECTOR_TYPE(Name, Id, SingletonId, ElKind, ElBits, NF, IsSigned,   \
                         IsFP, IsBF)                                            \
   case BuiltinType::Id:                                                        \

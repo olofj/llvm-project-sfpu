@@ -73,6 +73,12 @@
   RVV_VECTOR_TYPE(Name, Id, SingletonId, NumEls, ElBits, NF, false, false, true)
 #endif
 
+//===- Tenstorrent SFPU types ----------------------------------------------===//
+// __xtt_vector: fixed 32-bit SFPU register value, distinct from unsigned int.
+// Equivalent to GCC's __xtt_vector (XTT32SImode). Implicitly convertible
+// to/from unsigned int via conversion rules in SemaOverload.cpp.
+RVV_TYPE("__xtt_vector", XttVector, XttVectorTy)
+
 //===- Vector types -------------------------------------------------------===//
 
 RVV_VECTOR_TYPE_INT("__rvv_int8mf8_t", RvvInt8mf8, RvvInt8mf8Ty, 1,   8, 1, true)

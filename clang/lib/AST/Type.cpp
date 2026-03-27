@@ -2493,6 +2493,9 @@ bool Type::isSVESizelessBuiltinType() const {
 
 bool Type::isRVVSizelessBuiltinType() const {
   if (const BuiltinType *BT = getAs<BuiltinType>()) {
+    // __xtt_vector is a fixed-size (32-bit) type, NOT sizeless
+    if (BT->getKind() == BuiltinType::XttVector)
+      return false;
     switch (BT->getKind()) {
 #define RVV_TYPE(Name, Id, SingletonId) case BuiltinType::Id:
 #include "clang/Basic/RISCVVTypes.def"

@@ -566,6 +566,11 @@ llvm::Type *CodeGenTypes::ConvertType(QualType T) {
 #define RVV_TYPE(Name, Id, SingletonId) case BuiltinType::Id:
 #include "clang/Basic/RISCVVTypes.def"
       {
+        // __xtt_vector is a fixed i32 type, not a scalable vector
+        if (cast<BuiltinType>(Ty)->getKind() == BuiltinType::XttVector) {
+          ResultType = llvm::Type::getInt32Ty(getLLVMContext());
+          break;
+        }
         ASTContext::BuiltinVectorTypeInfo Info =
             Context.getBuiltinVectorTypeInfo(cast<BuiltinType>(Ty));
         // Tuple types are expressed as aggregregate types of the same scalable

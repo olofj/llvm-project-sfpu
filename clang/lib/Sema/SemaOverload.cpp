@@ -2299,6 +2299,27 @@ static bool IsStandardConversion(Sema &S, Expr* From, QualType ToType,
     SCS.Second = SecondICK;
     SCS.Dimension = DimensionICK;
     FromType = ToType.getUnqualifiedType();
+  } else if ([&]() {
+    // Tenstorrent __xtt_vector ↔ unsigned int implicit conversion.
+    // __xtt_vector is a 32-bit builtin type (like GCC's XTT32SImode) that
+    // is distinct for overload resolution but implicitly convertible to/from
+    // unsigned int ONLY. This prevents ambiguity with int/short/int32_t
+    // constructors in sfpi.h's vInt class.
+    const auto *FromBT = FromType->getAs<BuiltinType>();
+    const auto *ToBT = ToType->getAs<BuiltinType>();
+    if (!FromBT || !ToBT) return false;
+    bool FromIsXtt = FromBT->getKind() == BuiltinType::XttVector;
+    bool ToIsXtt = ToBT->getKind() == BuiltinType::XttVector;
+    // ONLY unsigned int — not signed int (prevents vFloat(1) ambiguity)
+    bool FromIsUI = FromBT->getKind() == BuiltinType::UInt;
+    bool ToIsUI = ToBT->getKind() == BuiltinType::UInt;
+    return (FromIsXtt && ToIsUI) || (FromIsUI && ToIsXtt);
+  }()) {
+    // Rank as an integral conversion (worse than identity) so that
+    // vInt(__xtt_vector) beats vInt(unsigned int) in overload resolution.
+    // No actual code is needed at IR level — both are i32.
+    SCS.Second = ICK_Integral_Conversion;
+    FromType = ToType.getUnqualifiedType();
   } else if (!S.getLangOpts().CPlusPlus &&
              S.Context.typesAreCompatible(ToType, FromType)) {
     // Compatible conversions (Clang extension for C function overloading)
