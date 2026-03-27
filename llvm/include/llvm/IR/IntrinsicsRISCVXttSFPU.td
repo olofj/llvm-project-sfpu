@@ -18,7 +18,8 @@ let TargetPrefix = "riscv" in {
 def int_riscv_tt_sfpload
     : Intrinsic<[llvm_i32_ty],
                 [llvm_i32_ty, llvm_i32_ty, llvm_i32_ty],
-                [IntrReadMem, IntrHasSideEffects, ImmArg<ArgIndex<0>>]>;
+                [IntrReadMem, IntrHasSideEffects,
+                 ImmArg<ArgIndex<0>>, ImmArg<ArgIndex<1>>]>;
 
 def int_riscv_tt_sfploadi
     : Intrinsic<[llvm_i32_ty],
@@ -28,7 +29,8 @@ def int_riscv_tt_sfploadi
 def int_riscv_tt_sfpstore
     : Intrinsic<[],
                 [llvm_i32_ty, llvm_i32_ty, llvm_i32_ty, llvm_i32_ty],
-                [IntrWriteMem, IntrHasSideEffects, ImmArg<ArgIndex<1>>]>;
+                [IntrWriteMem, IntrHasSideEffects,
+                 ImmArg<ArgIndex<1>>, ImmArg<ArgIndex<2>>]>;
 
 def int_riscv_tt_sfplut
     : Intrinsic<[llvm_i32_ty],

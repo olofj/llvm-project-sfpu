@@ -2590,7 +2590,11 @@ void RISCVDAGToDAGISel::Select(SDNode *Node) {
     // CC stack and comparison void intrinsics
     case Intrinsic::riscv_tt_sfpsetcc: {
       SDValue Chain = Node->getOperand(0);
+      // Src is an SFPU register value (not an index). Constants mean "don't care"
+      // — use L9 (reserved zero constant, always live) for don't-care.
       SDValue Src = Node->getOperand(2);
+      if (isa<ConstantSDNode>(Src))
+        Src = CurDAG->getRegister(RISCV::L9, MVT::i32);
       SDValue Imm = SFPU_IMM(Node->getOperand(3));
       SDValue Mod1 = SFPU_IMM(Node->getOperand(4));
       MachineSDNode *MI = CurDAG->getMachineNode(
