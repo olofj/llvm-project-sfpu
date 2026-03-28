@@ -159,14 +159,12 @@ bool RISCVXttSFPUErrata::isBHScoreboardErrata(
     const MachineInstr &Consumer, const MachineInstr &Producer) const {
 
   // mod1 constants from sfpi_constants.h
-  enum {
-    SFPSWAP_MOD1_SWAP = 0,
-    SFPSHFT2_MOD1_SUBVEC_SHFLROR1_AND_COPY4 = 2,
-    SFPSHFT2_MOD1_SUBVEC_SHFLROR1 = 3,
-    SFPSHFT2_MOD1_SUBVEC_SHFLSHR1 = 4,
-    SFPSHFT2_MOD1_SHFT_LREG = 5,
-    SFPSHFT2_MOD1_SHFT_IMM = 6,
-  };
+  constexpr unsigned SFPSWAP_MOD1_SWAP = 0;
+  constexpr unsigned SFPSHFT2_MOD1_SUBVEC_SHFLROR1_AND_COPY4 = 2;
+  constexpr unsigned SFPSHFT2_MOD1_SUBVEC_SHFLROR1 = 3;
+  constexpr unsigned SFPSHFT2_MOD1_SUBVEC_SHFLSHR1 = 4;
+  constexpr unsigned SFPSHFT2_MOD1_SHFT_LREG = 5;
+  constexpr unsigned SFPSHFT2_MOD1_SHFT_IMM = 6;
 
   unsigned Opc = Consumer.getOpcode();
 
@@ -324,6 +322,7 @@ bool RISCVXttSFPUErrata::handleE004_PipelineHazards(MachineFunction &MF) {
       }
 
       if (NeedNop) {
+        LLVM_DEBUG(dbgs() << "  E-004: inserting NOP after: " << MI);
         BuildMI(MBB, NextMI, MI.getDebugLoc(), TII->get(RISCV::SFPNOP));
         Changed = true;
       }
@@ -351,6 +350,7 @@ bool RISCVXttSFPUErrata::handleE005_StoreRegRestriction(MachineFunction &MF) {
       Register Reg = LRegOp.getReg();
       if (Reg == RISCV::L12 || Reg == RISCV::L13 ||
           Reg == RISCV::L14 || Reg == RISCV::L15) {
+        LLVM_DEBUG(dbgs() << "  E-005 violation: " << MI);
         MI.emitError("E-005: SFPSTORE cannot use L12-L15 as source register");
         return false;
       }
@@ -369,6 +369,7 @@ bool RISCVXttSFPUErrata::handleE012_EbreakNops(MachineFunction &MF) {
       if (MBBI->getOpcode() != RISCV::EBREAK)
         continue;
 
+      LLVM_DEBUG(dbgs() << "  E-012: inserting 8 NOPs after ebreak\n");
       auto InsertPt = std::next(MBBI);
       for (int i = 0; i < 8; ++i) {
         BuildMI(MBB, InsertPt, MBBI->getDebugLoc(), TII->get(RISCV::SFPNOP));
@@ -392,8 +393,8 @@ bool RISCVXttSFPUErrata::handleE002_SFPSHFT2ZeroFill(MachineFunction &MF) {
 
   // SFPSHFT2 mod1 values from sfpi-gcc/gcc/config/riscv/tt/rvtt-protos.h:213-219
   // and ttsim-analysis/ERRATA.md C-020 (SFPSHFT2 Modifiers table)
-  const unsigned SHFLSHR1_MOD1 = 4;  // SUBVEC_SHFLSHR1 (shift right 1, zero-fill)
-  const unsigned SHFLROR1_MOD1 = 3;  // SUBVEC_SHFLROR1 (rotate right 1)
+  constexpr unsigned SHFLSHR1_MOD1 = 4;  // SUBVEC_SHFLSHR1 (shift right 1, zero-fill)
+  constexpr unsigned SHFLROR1_MOD1 = 3;  // SUBVEC_SHFLROR1 (rotate right 1)
 
   for (MachineBasicBlock &MBB : MF) {
     for (auto MBBI = MBB.begin(), MBBE = MBB.end(); MBBI != MBBE; ++MBBI) {
@@ -408,6 +409,8 @@ bool RISCVXttSFPUErrata::handleE002_SFPSHFT2ZeroFill(MachineFunction &MF) {
 
       // Insert dead rotate: SFPSHFT2 L9, dst, SHFLROR1
       // This clears the pipeline to 0 so the subsequent SHFLSHR1 gets correct fill
+      LLVM_DEBUG(dbgs() << "  E-002: inserting SHFLROR1 workaround before: "
+                        << *MBBI);
       BuildMI(MBB, MBBI, MBBI->getDebugLoc(), TII->get(RISCV::SFPSHFT2))
           .addReg(RISCV::L0, RegState::Define)  // dummy dest
           .addImm(0)                              // imm12 = 0

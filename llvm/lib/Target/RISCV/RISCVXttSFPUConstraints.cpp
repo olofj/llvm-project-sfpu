@@ -73,8 +73,10 @@ char RISCVXttSFPUConstraints::ID = 0;
 ///   SFPMAD/SFPMUL: fix dest := src_a
 ///   SFPADD: no fixup needed (src_a is L10 constant, dest encoding doesn't matter)
 bool RISCVXttSFPUConstraints::verifyWHConstraints(MachineFunction &MF) {
-  if (!STI->hasVendorXttSFPUWH())
-    return false;  // BH has relaxed constraints
+  if (!STI->hasVendorXttSFPUWH()) {
+    LLVM_DEBUG(dbgs() << "C-010: skipping (BH has relaxed constraints)\n");
+    return false;
+  }
 
   bool Changed = false;
 
