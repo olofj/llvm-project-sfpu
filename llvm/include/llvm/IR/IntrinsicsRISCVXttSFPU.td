@@ -13,13 +13,16 @@
 
 let TargetPrefix = "riscv" in {
 
-//--- Load/Store --- (mod0 is always compile-time)
+//--- Load/Store ---
+// No ImmArg on sfpload: mod0 is always constant in practice, but vInt
+// constructor sets it via a local variable that clang can't validate as
+// a constant expression at builtin-check time. The ISel handler uses
+// SFPU_IMM() (dyn_cast<ConstantSDNode>) which works without ImmArg.
 
 def int_riscv_tt_sfpload
     : Intrinsic<[llvm_i32_ty],
                 [llvm_i32_ty, llvm_i32_ty, llvm_i32_ty],
-                [IntrReadMem, IntrHasSideEffects,
-                 ImmArg<ArgIndex<0>>, ImmArg<ArgIndex<1>>]>;
+                [IntrReadMem, IntrHasSideEffects]>;
 
 def int_riscv_tt_sfploadi
     : Intrinsic<[llvm_i32_ty],
@@ -29,8 +32,7 @@ def int_riscv_tt_sfploadi
 def int_riscv_tt_sfpstore
     : Intrinsic<[],
                 [llvm_i32_ty, llvm_i32_ty, llvm_i32_ty, llvm_i32_ty],
-                [IntrWriteMem, IntrHasSideEffects,
-                 ImmArg<ArgIndex<1>>, ImmArg<ArgIndex<2>>]>;
+                [IntrWriteMem, IntrHasSideEffects]>;
 
 def int_riscv_tt_sfplut
     : Intrinsic<[llvm_i32_ty],
@@ -177,6 +179,28 @@ def int_riscv_tt_sfple
     : Intrinsic<[], [llvm_i32_ty, llvm_i32_ty, llvm_i32_ty],
                 [IntrNoMem, IntrHasSideEffects]>;
 
+//--- Direct L-Register Access ---
+// sfpreadlreg: read from L-register by index (0-15). Index is always constant
+// at runtime but flows through constexpr member functions that clang can't
+// validate at builtin-arg-check time, so NO ImmArg.
+def int_riscv_tt_sfpreadlreg
+    : Intrinsic<[llvm_i32_ty], [llvm_i32_ty],
+                [IntrNoMem, IntrHasSideEffects]>;
+// sfpwritelreg: write to L-register by index.
+def int_riscv_tt_sfpwritelreg
+    : Intrinsic<[], [llvm_i32_ty, llvm_i32_ty],
+                [IntrNoMem, IntrHasSideEffects]>;
+
+//--- Multi-Register Result Selection ---
+// sfpselect2: extract lane from 2-result instruction (SFPSWAP)
+def int_riscv_tt_sfpselect2
+    : Intrinsic<[llvm_i32_ty], [llvm_i32_ty, llvm_i32_ty],
+                [IntrNoMem, IntrHasSideEffects]>;
+// sfpselect4: extract lane from 4-result instruction (SFPTRANSP)
+def int_riscv_tt_sfpselect4
+    : Intrinsic<[llvm_i32_ty], [llvm_i32_ty, llvm_i32_ty],
+                [IntrNoMem, IntrHasSideEffects]>;
+
 //--- Live-Value (_lv) --- (no ImmArg)
 
 def int_riscv_tt_sfpmov_lv
@@ -193,7 +217,7 @@ def int_riscv_tt_sfpadd_lv
                 [IntrNoMem, IntrHasSideEffects]>;
 def int_riscv_tt_sfpload_lv
     : Intrinsic<[llvm_i32_ty], [llvm_i32_ty, llvm_i32_ty, llvm_i32_ty, llvm_i32_ty],
-                [IntrReadMem, IntrHasSideEffects, ImmArg<ArgIndex<1>>]>;
+                [IntrReadMem, IntrHasSideEffects]>;
 def int_riscv_tt_sfpcast_lv
     : Intrinsic<[llvm_i32_ty], [llvm_i32_ty, llvm_i32_ty, llvm_i32_ty, llvm_i32_ty],
                 [IntrNoMem, IntrHasSideEffects]>;

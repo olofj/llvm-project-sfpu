@@ -530,6 +530,7 @@ void RISCVPassConfig::addPreEmitPass2() {
 
   // Tenstorrent SFPU post-RA passes (run before pseudo expansion)
   addPass(createRISCVXttSFPUConstraintsPass());
+  addPass(createRISCVXttSFPUPredElidePass());  // Elide trivial predication
   addPass(createRISCVXttSFPUPeepholePass());
   addPass(createRISCVXttSFPUReplayPass());
   addPass(createRISCVXttSFPUErrataPass());
@@ -552,6 +553,7 @@ void RISCVPassConfig::addMachineSSAOptimization() {
 
   // Tenstorrent SFPU pre-RA passes
   addPass(createRISCVXttSFPUCombinePass());
+  addPass(createRISCVXttSFPUEstrinPass());     // Horner→Estrin polynomial restructuring
   addPass(createRISCVXttSFPUSynthPass());
   addPass(createRISCVXttSFPULivenessPass());
 

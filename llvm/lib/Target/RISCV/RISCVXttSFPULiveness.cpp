@@ -16,10 +16,9 @@
 // The "_lv" variant preserves the register value in lanes that are disabled by
 // the predicate, rather than clobbering them.
 //
-// This pass tracks:
-// 1. CC stack depth (push/pop balance) to know when we're in predicated code
-// 2. Register liveness across predicated region boundaries
-// 3. Which instructions need "_lv" selection
+// Implementation: replaces non-_lv instructions with _lv variants that have
+// a tied $live_val = $lreg_dest constraint. This tells the register allocator
+// to keep the destination register's old value available.
 //
 // Reference: ttsim-analysis/ERRATA.md Section 3 (Architectural Notes)
 //            ttsim-analysis/FUNCTIONAL_UNITS.md Section 3.3
@@ -31,6 +30,7 @@
 #include "RISCVInstrInfo.h"
 #include "RISCVSubtarget.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
+#include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 
 using namespace llvm;
@@ -55,21 +55,48 @@ private:
   const RISCVSubtarget *STI = nullptr;
   const RISCVInstrInfo *TII = nullptr;
 
-  /// Track CC stack depth through a basic block.
-  /// Returns the net change in stack depth (positive = more pushes than pops).
   int computeCCStackDelta(const MachineBasicBlock &MBB) const;
-
-  /// Check if a register is live-in to the predicated region containing MI.
   bool isLiveAcrossPredication(const MachineInstr &MI, Register Reg,
                                 const MachineBasicBlock &MBB) const;
+  bool selectLiveValueVariant(MachineInstr &MI, int CCDepth,
+                               MachineBasicBlock &MBB);
 
-  /// Select "_lv" variant for an instruction if needed.
-  bool selectLiveValueVariant(MachineInstr &MI, int CCDepth);
+  /// Map non-_lv opcode to _lv opcode. Returns 0 if no _lv variant.
+  unsigned getLVVariant(unsigned Opcode) const;
 };
 
 } // end anonymous namespace
 
 char RISCVXttSFPULiveness::ID = 0;
+
+unsigned RISCVXttSFPULiveness::getLVVariant(unsigned Opcode) const {
+  switch (Opcode) {
+  // Unary _lv
+  case RISCV::SFPMOV:    return RISCV::SFPMOV_LV;
+  case RISCV::SFPABS:    return RISCV::SFPABS_LV;
+  case RISCV::SFPEXEXP:  return RISCV::SFPEXEXP_LV;
+  case RISCV::SFPEXMAN:  return RISCV::SFPEXMAN_LV;
+  case RISCV::SFPNOT:    return RISCV::SFPNOT_LV;
+  case RISCV::SFPLZ:     return RISCV::SFPLZ_LV;
+  case RISCV::SFPDIVP2:  return RISCV::SFPDIVP2_LV;
+  case RISCV::SFPSETEXP: return RISCV::SFPSETEXP_LV;
+  case RISCV::SFPSETMAN: return RISCV::SFPSETMAN_LV;
+  case RISCV::SFPSETSGN: return RISCV::SFPSETSGN_LV;
+  case RISCV::SFPCAST:   return RISCV::SFPCAST_LV;
+  case RISCV::SFPSHFT2:  return RISCV::SFPSHFT2_LV;
+  // 3-Op _lv
+  case RISCV::SFPMAD:    return RISCV::SFPMAD_LV;
+  case RISCV::SFPADD:    return RISCV::SFPADD_LV;
+  case RISCV::SFPMUL:    return RISCV::SFPMUL_LV;
+  // Load _lv
+  case RISCV::SFPLOAD_BH: return RISCV::SFPLOAD_BH_LV;
+  case RISCV::SFPLOAD_WH: return RISCV::SFPLOAD_WH_LV;
+  // BH-only _lv
+  case RISCV::SFPARECIP: return RISCV::SFPARECIP_LV;
+  case RISCV::SFPMUL24:  return RISCV::SFPMUL24_LV;
+  default: return 0;
+  }
+}
 
 int RISCVXttSFPULiveness::computeCCStackDelta(
     const MachineBasicBlock &MBB) const {
@@ -115,12 +142,11 @@ bool RISCVXttSFPULiveness::isLiveAcrossPredication(
 }
 
 bool RISCVXttSFPULiveness::selectLiveValueVariant(MachineInstr &MI,
-                                                    int CCDepth) {
-  // Only need _lv variants when inside predicated code (CC depth > 0)
+                                                    int CCDepth,
+                                                    MachineBasicBlock &MBB) {
   if (CCDepth <= 0)
     return false;
 
-  // Only SFPU instructions that write a destination register need _lv
   if (MI.getNumDefs() == 0)
     return false;
 
@@ -130,34 +156,46 @@ bool RISCVXttSFPULiveness::selectLiveValueVariant(MachineInstr &MI,
 
   Register DestReg = DestOp.getReg();
 
-  // Check if destination is live across the predication boundary
-  if (!isLiveAcrossPredication(MI, DestReg, *MI.getParent()))
+  if (!isLiveAcrossPredication(MI, DestReg, MBB))
     return false;
 
-  // Replace the instruction opcode with its _lv variant.
-  // _lv variants have an extra "live" operand (operand 0) that specifies the
-  // register value to preserve in disabled lanes.
-  //
-  // The _lv instruction definitions are in RISCVInstrInfoXttSFPU.td:
-  //   SFPMOV_LV, SFPMAD_LV, SFPMUL_LV, SFPADD_LV, SFPCAST_LV, etc.
-  //
-  // Since _lv variants have a different operand count (extra live-in operand),
-  // we cannot simply change the opcode. Instead, we set the mod1 bit 3
-  // (MOD1_LV_FLAG = 0x8) to signal live-value preservation in the encoding.
-  // This matches the hardware behavior: bit 3 of mod1 tells the SFPU to
-  // merge the result with the existing register value per-lane.
-  unsigned Mod1Idx = MI.getNumOperands() - 1;
-  MachineOperand &Mod1Op = MI.getOperand(Mod1Idx);
-  if (Mod1Op.isImm()) {
-    unsigned OldMod = Mod1Op.getImm();
-    constexpr unsigned MOD1_LV_FLAG = 0x8;
-    Mod1Op.setImm(OldMod | MOD1_LV_FLAG);
-    LLVM_DEBUG(dbgs() << "  Set _lv flag (mod1 |= 0x8) for: " << MI);
-    return true;
+  unsigned LVOpc = getLVVariant(MI.getOpcode());
+  if (!LVOpc) {
+    // No _lv variant — fall back to mod1 bit 3 (encoding-level flag).
+    unsigned Mod1Idx = MI.getNumOperands() - 1;
+    MachineOperand &Mod1Op = MI.getOperand(Mod1Idx);
+    if (Mod1Op.isImm()) {
+      constexpr unsigned MOD1_LV_FLAG = 0x8;
+      Mod1Op.setImm(Mod1Op.getImm() | MOD1_LV_FLAG);
+      LLVM_DEBUG(dbgs() << "  Set _lv flag (mod1 |= 0x8, no _lv variant) for: "
+                        << MI);
+      return true;
+    }
+    return false;
   }
 
-  LLVM_DEBUG(dbgs() << "  Could not set _lv flag (no imm mod1) for: " << MI);
-  return false;
+  // Build the _lv variant: insert $live_val operand (tied to dest).
+  // _lv variants have dest as operand 0 and live_val as operand 1,
+  // then the remaining operands from the original instruction.
+  DebugLoc DL = MI.getDebugLoc();
+  MachineInstrBuilder MIB = BuildMI(MBB, MI, DL, TII->get(LVOpc), DestReg)
+                                .addReg(DestReg);  // live_val = dest (tied)
+
+  // Copy remaining operands (skip operand 0 which is the dest)
+  for (unsigned I = 1, E = MI.getNumOperands(); I < E; ++I) {
+    MachineOperand &Op = MI.getOperand(I);
+    if (Op.isReg())
+      MIB.addReg(Op.getReg(), getRegState(Op));
+    else if (Op.isImm())
+      MIB.addImm(Op.getImm());
+    else
+      MIB.add(Op);
+  }
+
+  LLVM_DEBUG(dbgs() << "  Replaced with _lv variant: " << *MIB << "\n");
+
+  MI.eraseFromParent();
+  return true;
 }
 
 bool RISCVXttSFPULiveness::runOnMachineFunction(MachineFunction &MF) {
@@ -173,7 +211,9 @@ bool RISCVXttSFPULiveness::runOnMachineFunction(MachineFunction &MF) {
   for (MachineBasicBlock &MBB : MF) {
     int CCDepth = 0;
 
-    for (MachineInstr &MI : MBB) {
+    for (auto MBBI = MBB.begin(), MBBE = MBB.end(); MBBI != MBBE; ) {
+      MachineInstr &MI = *MBBI++;
+
       // Track CC stack depth
       switch (MI.getOpcode()) {
       case RISCV::SFPPUSHC:
@@ -182,14 +222,13 @@ bool RISCVXttSFPULiveness::runOnMachineFunction(MachineFunction &MF) {
       case RISCV::SFPPOPC:
         CCDepth--;
         if (CCDepth < 0)
-          CCDepth = 0;  // Unbalanced pop — reset
+          CCDepth = 0;
         break;
       default:
         break;
       }
 
-      // Select _lv variants for instructions inside predicated regions
-      Changed |= selectLiveValueVariant(MI, CCDepth);
+      Changed |= selectLiveValueVariant(MI, CCDepth, MBB);
     }
   }
 

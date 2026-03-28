@@ -372,8 +372,11 @@ class SFPUNop<bits<8> opcode, string opcodestr>
 
 let Predicates = [HasXttSFPU] in {
 
-//--- Load/Store Instructions (BH encoding — primary target) ---
+//--- Load/Store Instructions ---
+// BH and WH have different addr_mode widths (3-bit vs 2-bit).
+// Guard with architecture predicates so asm parser selects the right one.
 
+let Predicates = [HasXttSFPU, HasXttSFPUBH] in {
 def SFPLOAD_BH : SFPULoadBH<0x70, "sfpload",
     (outs SFPURegs:$lreg_ind),
     (ins uimm4_sfpu:$mod0, uimm3_sfpu:$addr_mode, uimm13_sfpu:$addr),
@@ -381,6 +384,7 @@ def SFPLOAD_BH : SFPULoadBH<0x70, "sfpload",
   let mayLoad = 1;
   let Defs = [];
 }
+} // HasXttSFPUBH
 
 def SFPLOADI : SFPULoadI<0x71, "sfploadi",
     (outs SFPURegs:$lreg_ind),
@@ -389,6 +393,7 @@ def SFPLOADI : SFPULoadI<0x71, "sfploadi",
   let mayLoad = 1;
 }
 
+let Predicates = [HasXttSFPU, HasXttSFPUBH] in {
 def SFPSTORE_BH : SFPULoadBH<0x72, "sfpstore",
     (outs),
     (ins SFPUStoreRegs:$lreg_ind, uimm4_sfpu:$mod0,
@@ -396,6 +401,7 @@ def SFPSTORE_BH : SFPULoadBH<0x72, "sfpstore",
     "$lreg_ind, $mod0, $addr_mode, $addr"> {
   let mayStore = 1;
 }
+} // HasXttSFPUBH
 
 def SFPLUT : SFPULut<0x73, "sfplut",
     (outs SFPURegs:$lreg_ind),
@@ -756,6 +762,15 @@ def SFPLOAD_BH_LV : SFPULoadBH<0x70, "sfpload",
     (outs SFPURegs:$lreg_ind),
     (ins SFPURegs:$live_val, uimm4_sfpu:$mod0,
          uimm3_sfpu:$addr_mode, uimm13_sfpu:$addr),
+    "$lreg_ind, $live_val, $mod0, $addr_mode, $addr"> {
+  let mayLoad = 1;
+  let Constraints = "$lreg_ind = $live_val";
+}
+
+def SFPLOAD_WH_LV : SFPULoadWH<0x70, "sfpload",
+    (outs SFPURegs:$lreg_ind),
+    (ins SFPURegs:$live_val, uimm4_sfpu:$mod0,
+         uimm2_sfpu:$addr_mode, uimm14_sfpu:$addr),
     "$lreg_ind, $live_val, $mod0, $addr_mode, $addr"> {
   let mayLoad = 1;
   let Constraints = "$lreg_ind = $live_val";

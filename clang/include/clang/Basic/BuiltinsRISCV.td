@@ -217,6 +217,15 @@ def tt_sfpcast_lv   : RISCVBuiltin<"unsigned int(unsigned int, unsigned int, uns
 // --- Config / Control ---
 def tt_sfpconfig    : RISCVBuiltin<"void(unsigned int, unsigned int, unsigned int)">;
 
+// --- Direct L-Register Access ---
+// No _Constant: index flows through constexpr get() which clang can't validate
+def tt_sfpreadlreg  : RISCVBuiltin<"unsigned int(unsigned int)">;
+def tt_sfpwritelreg : RISCVBuiltin<"void(unsigned int, unsigned int)">;
+
+// --- Multi-Register Result Selection ---
+def tt_sfpselect2   : RISCVBuiltin<"unsigned int(unsigned int, unsigned int)">;
+def tt_sfpselect4   : RISCVBuiltin<"unsigned int(unsigned int, unsigned int)">;
+
 // --- Swap / Shift2 / LUT ---
 def tt_sfpswap      : RISCVBuiltin<"unsigned int(unsigned int, unsigned int, unsigned int)">;
 def tt_sfpshft2     : RISCVBuiltin<"unsigned int(unsigned int, unsigned int, unsigned int)">;

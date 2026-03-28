@@ -22173,6 +22173,16 @@ Value *CodeGenFunction::EmitRISCVBuiltinExpr(unsigned BuiltinID,
   // Config / Control
   case RISCV::BI__builtin_riscv_tt_sfpconfig:
     ID = Intrinsic::riscv_tt_sfpconfig; break;
+  // Direct L-Register Access
+  case RISCV::BI__builtin_riscv_tt_sfpreadlreg:
+    ID = Intrinsic::riscv_tt_sfpreadlreg; break;
+  case RISCV::BI__builtin_riscv_tt_sfpwritelreg:
+    ID = Intrinsic::riscv_tt_sfpwritelreg; break;
+  // Multi-Register Result Selection
+  case RISCV::BI__builtin_riscv_tt_sfpselect2:
+    ID = Intrinsic::riscv_tt_sfpselect2; break;
+  case RISCV::BI__builtin_riscv_tt_sfpselect4:
+    ID = Intrinsic::riscv_tt_sfpselect4; break;
   // Swap / Shift2 / LUT
   case RISCV::BI__builtin_riscv_tt_sfpswap:
     ID = Intrinsic::riscv_tt_sfpswap; break;

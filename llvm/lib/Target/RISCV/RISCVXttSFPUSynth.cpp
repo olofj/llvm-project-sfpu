@@ -54,6 +54,13 @@ private:
   /// Expand an out-of-range immediate operand.
   bool expandImmediate(MachineInstr &MI, unsigned ImmOpIdx,
                        unsigned FieldWidth);
+
+  /// Get the register-form variant for an immediate-form instruction.
+  /// Returns 0 if no register-form exists.
+  unsigned getRegFormVariant(unsigned Opcode) const;
+
+  /// Substitute immediate-form instruction with register-form using ScratchReg.
+  bool substituteRegForm(MachineInstr &MI, Register ScratchReg);
 };
 
 } // end anonymous namespace
@@ -142,12 +149,14 @@ bool RISCVXttSFPUSynth::expandImmediate(MachineInstr &MI, unsigned ImmOpIdx,
         .addImm(ImmVal)
         .addImm(0);  // mod1 = FLOATB
 
-    // Replace the immediate operand with L7 register reference
-    // NOTE: This requires the instruction to have a register-form variant.
-    // For now, we just update the immediate to the truncated value and
-    // document that full expansion requires instruction substitution.
-    LLVM_DEBUG(dbgs() << "Synthesized imm " << ImmVal
+    LLVM_DEBUG(dbgs() << "  Synthesized imm " << ImmVal
                       << " via SFPLOADI for: " << MI);
+    // Replace instruction with register-form variant using L7
+    if (substituteRegForm(MI, RISCV::L7))
+      return true;
+    // No register-form: truncate the immediate (best effort)
+    ImmOp.setImm(ImmVal & MaxVal);
+    LLVM_DEBUG(dbgs() << "  WARNING: truncated imm (no register-form variant)\n");
   } else {
     // Value > 16 bits: SFPLOADI (upper 16) + SFPIADD (lower 12)
     unsigned Upper = (ImmVal >> 12) & 0xFFFF;
@@ -166,10 +175,62 @@ bool RISCVXttSFPUSynth::expandImmediate(MachineInstr &MI, unsigned ImmOpIdx,
           .addImm(0);
     }
 
-    LLVM_DEBUG(dbgs() << "Synthesized wide imm " << ImmVal
+    LLVM_DEBUG(dbgs() << "  Synthesized wide imm " << ImmVal
                       << " via SFPLOADI+SFPIADD for: " << MI);
+    // Replace instruction with register-form variant using L7
+    if (substituteRegForm(MI, RISCV::L7))
+      return true;
+    // No register-form: truncate (best effort)
+    ImmOp.setImm(ImmVal & MaxVal);
+    LLVM_DEBUG(dbgs() << "  WARNING: truncated wide imm (no register-form)\n");
   }
 
+  return true;
+}
+
+unsigned RISCVXttSFPUSynth::getRegFormVariant(unsigned Opcode) const {
+  switch (Opcode) {
+  case RISCV::SFPMULI: return RISCV::SFPMUL;
+  case RISCV::SFPADDI: return RISCV::SFPADD;
+  default: return 0;  // No register-form variant
+  }
+}
+
+bool RISCVXttSFPUSynth::substituteRegForm(MachineInstr &MI,
+                                            Register ScratchReg) {
+  unsigned RegOpc = getRegFormVariant(MI.getOpcode());
+  if (!RegOpc)
+    return false;
+
+  MachineBasicBlock &MBB = *MI.getParent();
+  DebugLoc DL = MI.getDebugLoc();
+
+  // SFPMULI/SFPADDI format: (dest, imm16, mod1)
+  // SFPMUL/SFPADD format:   (dest, src_a, src_b, src_c, mod1)
+  // The scratch register (loaded immediate) becomes src_a.
+  // dest stays the same, src_b = dest (implicit in imm form),
+  // src_c = L9 (zero constant), mod1 stays the same.
+  Register DestReg = MI.getOperand(0).getReg();
+  unsigned Mod1 = 0;
+  // Find mod1 (last imm operand)
+  for (unsigned I = MI.getNumOperands(); I > 0; --I) {
+    if (MI.getOperand(I - 1).isImm()) {
+      Mod1 = MI.getOperand(I - 1).getImm();
+      break;
+    }
+  }
+
+  BuildMI(MBB, MI, DL, TII->get(RegOpc))
+      .addReg(DestReg, RegState::Define)
+      .addReg(ScratchReg)         // src_a = loaded constant
+      .addReg(DestReg)            // src_b = original dest (accumulator)
+      .addReg(RISCV::L9)          // src_c = zero constant
+      .addImm(Mod1);
+
+  LLVM_DEBUG(dbgs() << "  Substituted register-form: " << *std::prev(
+                 MachineBasicBlock::iterator(MI)));
+
+  MI.eraseFromParent();
   return true;
 }
 

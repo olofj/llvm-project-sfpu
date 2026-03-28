@@ -55,8 +55,10 @@ add_llvm_target(RISCVCodeGen
   RISCVXttSFPUCombine.cpp
   RISCVXttSFPUConstraints.cpp
   RISCVXttSFPUErrata.cpp
+  RISCVXttSFPUEstrin.cpp
   RISCVXttSFPULiveness.cpp
   RISCVXttSFPUPeephole.cpp
+  RISCVXttSFPUPredElide.cpp
   RISCVXttSFPUReplay.cpp
   RISCVXttSFPUSynth.cpp
   RISCVTargetObjectFile.cpp
