@@ -7,7 +7,7 @@
 //
 // MachineFunctionPass that transforms sequential Horner polynomial evaluation
 // chains into parallel Estrin form, creating ILP that the scheduler can use
-// to fill WH's 2-cycle MAD delay slots.
+// to fill the 2-cycle MAD delay slots.
 //
 // Horner's method evaluates a_n*x^n + ... + a_1*x + a_0 as:
 //   t = a_n
@@ -15,26 +15,19 @@
 //   t = t*x + a_{n-2}
 //   ...
 //
-// Estrin's method splits into independent sub-chains:
-//   For degree 3: (a3*x + a2) * x^2 + (a1*x + a0)
+// Estrin's method pairs adjacent terms:
+//   For degree 3: result = (a1*x + a0) + x^2*(a3*x + a2)
 //     lo = a1*x + a0     ← independent
-//     hi = a3*x + a2     ← independent (can fill lo's delay slot!)
+//     hi = a3*x + a2     ← independent (fills lo's delay slot)
 //     x2 = x*x           ← independent
 //     result = hi*x2 + lo
 //
-// On WH (no hardware scoreboarding), Horner costs 2*(n+1) cycles for degree n
-// (every MAD needs a NOP). Estrin costs ~1.5*(n+1) cycles because independent
-// MADs interleave, eliminating ~half the NOPs.
+// On the SFPU with 2-cycle MAD, Horner costs 2*N cycles (each MAD depends on
+// previous, causing a stall or NOP). Estrin costs ~1.5*N because independent
+// MADs interleave naturally.
 //
-// This pass runs after ISel but before scheduling and NOP insertion, so the
-// scheduler can freely reorder the independent chains.
-//
-// Applicable when:
-// - 3 or more chained SFPMAD instructions where each reads the previous result
-// - All MADs use the same "x" register as one of their multiply operands
-// - Target is WH (BH has hardware scoreboarding, so ILP matters less)
-//
-// Reference: ttsim-analysis analysis of Horner vs Estrin on WH SFPU
+// This pass runs pre-RA in addMachineSSAOptimization(), so virtual registers
+// are available for the restructured computation.
 //
 //===----------------------------------------------------------------------===//
 
@@ -66,19 +59,16 @@ public:
 private:
   const RISCVSubtarget *STI = nullptr;
   const RISCVInstrInfo *TII = nullptr;
+  MachineRegisterInfo *MRI = nullptr;
 
-  /// Detect a Horner chain: a sequence of SFPMAD instructions where
-  /// each one's result feeds into the next as a multiply operand.
-  /// Returns the chain length (0 if no chain found starting at MI).
   struct HornerChain {
     SmallVector<MachineInstr *, 8> MADs;
-    Register XReg;      // The common "x" variable
-    unsigned Degree;    // Polynomial degree (MADs.size())
+    Register XReg;    // The common "x" variable
+    unsigned Degree;  // Polynomial degree (== MADs.size())
   };
 
   bool findHornerChain(MachineInstr &StartMI, MachineBasicBlock &MBB,
                        HornerChain &Chain);
-
   bool transformToEstrin(HornerChain &Chain, MachineBasicBlock &MBB);
 };
 
@@ -87,11 +77,12 @@ private:
 char RISCVXttSFPUEstrin::ID = 0;
 
 /// Detect a Horner chain starting at StartMI.
-/// A Horner chain is a sequence of SFPMAD instructions where:
-///   MAD[0] result → MAD[1] src_b (or src_a)
-///   MAD[1] result → MAD[2] src_b (or src_a)
-///   ...
-/// And each MAD has a common "x" register as one of its multiply operands.
+///
+/// Horner pattern: a sequence of SFPMAD where each result feeds into the
+/// next as a multiply operand, and the same X register appears throughout.
+///
+/// SFPMAD operand layout: dest(0), src_a(1), src_b(2), src_c(3), mod1(4)
+/// Semantics: dest = src_a * src_b + src_c
 bool RISCVXttSFPUEstrin::findHornerChain(MachineInstr &StartMI,
                                            MachineBasicBlock &MBB,
                                            HornerChain &Chain) {
@@ -102,175 +93,237 @@ bool RISCVXttSFPUEstrin::findHornerChain(MachineInstr &StartMI,
   if (StartMI.getOpcode() != RISCV::SFPMAD)
     return false;
 
-  const MachineRegisterInfo &MRI = MBB.getParent()->getRegInfo();
-
   MachineInstr *Current = &StartMI;
   Register PrevResult;
 
   while (Current && Current->getOpcode() == RISCV::SFPMAD) {
     Chain.MADs.push_back(Current);
 
-    // SFPMAD operands: dest(0), src_a(1), src_b(2), src_c(3), mod1(4)
     Register Dest = Current->getOperand(0).getReg();
     Register SrcA = Current->getOperand(1).getReg();
     Register SrcB = Current->getOperand(2).getReg();
 
     if (Chain.MADs.size() == 1) {
-      // First MAD: identify X as one of the multiply operands
-      // (the one that's not a constant register)
-      if (SrcA.isPhysical() && SrcA >= RISCV::L8 && SrcA <= RISCV::L14)
-        Chain.XReg = SrcB;  // SrcA is a constant, X is SrcB
-      else
-        Chain.XReg = SrcA;  // X is SrcA (or both are variables)
-    } else {
-      // Subsequent MADs: verify chain dependency
-      // The previous result must be one of the multiply operands
-      bool ChainedA = (SrcA == PrevResult || SrcA == Dest);
-      bool ChainedB = (SrcB == PrevResult || SrcB == Dest);
+      // First MAD: can't determine X yet (both src_a and src_b could be X).
+      // Defer X identification until we see the second MAD, where the chain
+      // dependency reveals which operand is the accumulated result and which is X.
+    } else if (Chain.MADs.size() == 2) {
+      // Second MAD reveals X: one of src_a/src_b is the previous result (chain),
+      // the other is X. X is the one that also appeared in the first MAD.
+      Register MAD0_SrcA = Chain.MADs[0]->getOperand(1).getReg();
+      Register MAD0_SrcB = Chain.MADs[0]->getOperand(2).getReg();
+      bool ChainedA = (SrcA == PrevResult);
+      bool ChainedB = (SrcB == PrevResult);
       if (!ChainedA && !ChainedB)
-        break;  // Chain broken — not a Horner pattern
-
-      // Verify X is still present as the other multiply operand
-      Register OtherSrc = ChainedA ? SrcB : SrcA;
-      if (Chain.XReg && OtherSrc != Chain.XReg) {
-        // X changed — this might be a different polynomial
-        // For Estrin, we need the same X throughout
-        // Allow if OtherSrc is a register written in this BB
-        // (could be x^2, x^4, etc. from a previous Estrin transform)
         break;
+      Register OtherSrc = ChainedA ? SrcB : SrcA;
+      // X is OtherSrc if it also appeared in MAD0
+      if (OtherSrc == MAD0_SrcA || OtherSrc == MAD0_SrcB) {
+        Chain.XReg = OtherSrc;
+        LLVM_DEBUG(dbgs() << "  Estrin: identified X = "
+                          << printReg(Chain.XReg) << "\n");
+      } else {
+        break; // X changed — not a Horner chain
       }
+      PrevResult = Dest;
+      // Find next MAD
+      MachineInstr *NextMAD = nullptr;
+      if (Dest.isVirtual()) {
+        for (auto &Use : MRI->use_instructions(Dest)) {
+          if (Use.getOpcode() == RISCV::SFPMAD && Use.getParent() == &MBB) {
+            NextMAD = &Use;
+            break;
+          }
+        }
+      }
+      Current = NextMAD;
+      continue;
+    } else {
+      // Verify the chain dependency: the previous result must be one of
+      // the multiply operands (src_a or src_b).
+      bool ChainedA = (SrcA == PrevResult);
+      bool ChainedB = (SrcB == PrevResult);
+      if (!ChainedA && !ChainedB)
+        break;
+
+      // Verify X is the other multiply operand.
+      Register OtherSrc = ChainedA ? SrcB : SrcA;
+      if (Chain.XReg && OtherSrc != Chain.XReg)
+        break;
     }
 
     PrevResult = Dest;
 
-    // Find next MAD that uses this result
+    // Find the next MAD that consumes this result.
     MachineInstr *NextMAD = nullptr;
     if (Dest.isVirtual()) {
-      for (auto &Use : MRI.use_instructions(Dest)) {
+      for (auto &Use : MRI->use_instructions(Dest)) {
         if (Use.getOpcode() == RISCV::SFPMAD && Use.getParent() == &MBB) {
           NextMAD = &Use;
           break;
         }
       }
-    } else {
-      // Physical register: scan forward
-      auto I = MachineBasicBlock::iterator(*Current);
-      ++I;
-      for (auto E = MBB.end(); I != E; ++I) {
-        if (I->getOpcode() == RISCV::SFPMAD) {
-          // Check if it reads PrevResult
-          for (const MachineOperand &MO : I->operands()) {
-            if (MO.isReg() && MO.isUse() && MO.getReg() == Dest) {
-              NextMAD = &*I;
-              break;
-            }
-          }
-          break;  // Stop at first MAD regardless
-        }
-        if (I->getOpcode() != RISCV::SFPNOP)
-          break;  // Non-NOP non-MAD instruction breaks the chain
-      }
     }
-
     Current = NextMAD;
   }
 
   Chain.Degree = Chain.MADs.size();
-  return Chain.Degree >= 3;  // Need at least 3 MADs for Estrin to help
+  return Chain.Degree >= 3;
 }
 
-/// Transform a Horner chain into Estrin form.
+/// Transform a Horner chain of degree N into Estrin form.
 ///
-/// For degree 3 (4 coefficients):
-///   Horner: t0=a3*x+a2; t1=t0*x+a1; t2=t1*x+a0
-///   Estrin: lo=a1*x+a0; hi=a3*x+a2; x2=x*x; result=hi*x2+lo
+/// Degree 3 (3 MADs, coefficients a0..a3):
+///   Horner: t0 = a3*x + a2 → t1 = t0*x + a1 → t2 = t1*x + a0
+///   Estrin: lo = a1*x + a0;  hi = a3*x + a2;  x2 = x*x;  result = hi*x2 + lo
 ///
-/// For degree 4 (5 coefficients):
-///   Split into: lo_pair = (a1*x+a0), hi_pair = (a3*x+a2), top = a4
-///   lo = lo_pair; hi = hi_pair; x2 = x*x; x4 = x2*x2
-///   result = ((top*x2 + hi)*x2 + lo)
-///
-/// Key insight: "lo" and "hi" are INDEPENDENT and can fill each other's
-/// delay slots.
+/// We handle this by peeling off pairs from the bottom of the Horner chain
+/// and restructuring them into independent sub-chains.
 bool RISCVXttSFPUEstrin::transformToEstrin(HornerChain &Chain,
                                              MachineBasicBlock &MBB) {
   unsigned N = Chain.Degree;
   if (N < 3)
     return false;
 
-  LLVM_DEBUG(dbgs() << "Estrin: transforming degree-" << N
-                    << " Horner chain (" << N << " MADs)\n");
+  // Only handle degree 3 for now (3 dependent MADs → 2 independent + 1 combine).
+  // Higher degrees use the same principle recursively.
+  if (N > 4) {
+    LLVM_DEBUG(dbgs() << "  Estrin: degree " << N << " > 4, skipping\n");
+    return false;
+  }
 
-  // For now, handle degree 3 (the most common case in 2-step Horner).
-  // Higher degrees can be handled recursively.
-  //
-  // NOTE: This transform is only safe when the MADs form a pure polynomial
-  // chain (same x, constant coefficients). We verify this in findHornerChain.
-  //
-  // The actual Estrin restructuring requires replacing the MAD chain with
-  // a new set of MADs. Since we're working on physical registers after RA,
-  // we need to be careful about register allocation.
-  //
-  // For the initial implementation, we focus on the common degree-2 case
-  // (3 MADs) and degree-3 case (4 MADs), restructuring them to create
-  // independent pairs that the scheduler can interleave.
+  LLVM_DEBUG(dbgs() << "  Estrin: transforming degree-" << N
+                    << " Horner chain\n");
 
-  // For degree-2 Estrin (the most impactful case):
-  // Original Horner:
-  //   MAD0: t0 = a2*x + a1        (uses x, constant a2, constant a1)
-  //   MAD1: t1 = t0*x + a0        (depends on t0!)
-  //   (Sometimes preceded by: MAD_init: t_init = a3*x + a2)
+  // Horner chain: MADs[0] → MADs[1] → MADs[2] (→ MADs[3] for degree 4)
   //
-  // We can't easily restructure after register allocation because registers
-  // are already assigned. The right place for this is before RA (at IR level
-  // or MachineIR with virtual registers).
+  // MADs[0]: t0 = coeff_high * x + coeff_next
+  // MADs[1]: t1 = t0 * x + coeff_next
+  // MADs[2]: t2 = t1 * x + coeff_low
   //
-  // However, we CAN still help: if we detect a chain of 3+ MADs sharing
-  // the same X, we can INSERT an x^2 computation before the chain and
-  // restructure to use it. But this changes register allocation.
-  //
-  // PRACTICAL APPROACH: Rather than restructuring existing code, we
-  // optimize at the test/kernel level by providing Estrin-form IR templates
-  // and ensuring the scheduler handles them well. The key win is ensuring
-  // the scheduler interleaves independent MADs — which it already does
-  // (proven by the 43% improvement on interleaved_horner_2row).
+  // Reading the chain bottom-up:
+  // MADs[N-1] is the last MAD (produces the final result).
+  // MADs[N-1]->src_c is a0 (the constant term or accumulator).
+  // MADs[N-2]->src_c is a1 (or a1*x if degree > 3).
 
-  // For this pass: mark Horner chains for future optimization.
-  // The actual restructuring is deferred to an IR-level pass.
+  // For degree 3 Estrin:
+  // We need to build:
+  //   lo  = MADs[1]->non_chain_multiply_op * x + MADs[2]->src_c   (a1*x + a0)
+  //   hi  = MADs[0]                                                  (a3*x + a2, unchanged)
+  //   x2  = x * x
+  //   out = hi * x2 + lo
+
+  MachineInstr *MAD0 = Chain.MADs[0]; // a3*x + a2 (or top of chain)
+  MachineInstr *MAD1 = Chain.MADs[1]; // t0*x + a1
+  MachineInstr *MAD2 = Chain.MADs[2]; // t1*x + a0
+
+  Register X = Chain.XReg;
+  Register FinalDest = MAD2->getOperand(0).getReg();
+  Register A0 = MAD2->getOperand(3).getReg(); // src_c of last MAD
+  Register A1 = MAD1->getOperand(3).getReg(); // src_c of second-to-last MAD
+  unsigned Mod1 = MAD0->getOperand(4).getImm();
+  DebugLoc DL = MAD0->getDebugLoc();
+
+  // We need L9 (zero constant) for the MUL: x * x + 0
+  Register L9 = RISCV::L9;
+
+  // Create virtual registers for intermediates.
+  const TargetRegisterClass *RC = &RISCV::SFPURegsRegClass;
+  Register LoReg = MRI->createVirtualRegister(RC);
+  Register X2Reg = MRI->createVirtualRegister(RC);
+  Register HiReg = MAD0->getOperand(0).getReg(); // reuse MAD0's output
+
+  // Insert before MAD1 (the first instruction we're replacing).
+  MachineBasicBlock::iterator InsertPt = MachineBasicBlock::iterator(*MAD1);
+
+  // Build: lo = A1 * X + A0   (independent of hi)
+  BuildMI(MBB, InsertPt, DL, TII->get(RISCV::SFPMAD), LoReg)
+      .addReg(A1)
+      .addReg(X)
+      .addReg(A0)
+      .addImm(Mod1);
+
+  // Build: x2 = X * X + L9   (independent of both lo and hi)
+  // SFPMUL is src_a * src_b + L9 — but it's a 3-op with src_c = L9.
+  // Actually SFPMUL: dest = src_a * src_b (src_c must be L9 on BH).
+  BuildMI(MBB, InsertPt, DL, TII->get(RISCV::SFPMUL), X2Reg)
+      .addReg(X)
+      .addReg(X)
+      .addReg(L9)
+      .addImm(0);
+
+  // Build: result = HiReg * X2 + LoReg
+  // This replaces MAD2's output.
+  BuildMI(MBB, InsertPt, DL, TII->get(RISCV::SFPMAD), FinalDest)
+      .addReg(HiReg)
+      .addReg(X2Reg)
+      .addReg(LoReg)
+      .addImm(Mod1);
+
   LLVM_DEBUG({
-    dbgs() << "  Chain of " << N << " dependent MADs found:\n";
-    for (auto *MI : Chain.MADs)
-      dbgs() << "    " << *MI;
-    dbgs() << "  X register: " << printReg(Chain.XReg) << "\n";
-    dbgs() << "  NOTE: Estrin restructuring requires IR-level transform.\n"
-           << "  The scheduler will interleave independent MADs if Estrin\n"
-           << "  form is used at the source level.\n";
+    dbgs() << "  Estrin: replaced " << N << " sequential MADs with:\n"
+           << "    hi  = (kept) " << *MAD0
+           << "    lo  = MAD  A1*X+A0\n"
+           << "    x2  = MUL  X*X\n"
+           << "    out = MAD  hi*x2+lo\n";
   });
 
-  return false;  // No modification yet — analysis only
+  // Remove the old MADs (except MAD0 which we kept as "hi").
+  MAD2->eraseFromParent();
+  MAD1->eraseFromParent();
+
+  // Handle degree 4: chain has 4 MADs. We've consumed MADs[1] and MADs[2].
+  // MADs[3] (if present) was: t2*x + final_a0.
+  // After restructuring, t2 is now produced by our new final MAD.
+  // MADs[3] naturally consumes FinalDest and doesn't need modification
+  // (the SSA value it reads is the same virtual register).
+  // Actually for degree 4, we need to also handle MADs[3].
+  if (N >= 4) {
+    MachineInstr *MAD3 = Chain.MADs[3];
+    // MAD3 reads MAD2's original output. Since we replaced MAD2 with our
+    // new MAD that writes to FinalDest (same register), MAD3 automatically
+    // picks up the new value. But we need to verify MAD3 is now reading
+    // the correct register. If MAD3's chain input was the old MAD2 dest,
+    // and we wrote to FinalDest = old MAD2 dest, it should be correct.
+    //
+    // However, FinalDest was MAD2's dest. MAD3 reads that. Our new SFPMAD
+    // writes to FinalDest. So the def-use chain is preserved.
+    LLVM_DEBUG(dbgs() << "  Estrin: degree 4, MAD3 now reads restructured "
+                      << "output: " << *MAD3);
+  }
+
+  return true;
 }
 
 bool RISCVXttSFPUEstrin::runOnMachineFunction(MachineFunction &MF) {
   STI = &MF.getSubtarget<RISCVSubtarget>();
 
-  // Estrin is most beneficial on WH (no scoreboarding),
-  // but the analysis is useful on all targets.
   if (!STI->hasVendorXttSFPU())
     return false;
 
   TII = STI->getInstrInfo();
+  MRI = &MF.getRegInfo();
 
   bool Changed = false;
 
   for (MachineBasicBlock &MBB : MF) {
-    for (auto MBBI = MBB.begin(), MBBE = MBB.end(); MBBI != MBBE; ++MBBI) {
-      if (MBBI->getOpcode() != RISCV::SFPMAD)
+    SmallVector<MachineInstr *, 4> ChainStarts;
+    // Collect potential chain starts first to avoid iterator invalidation.
+    for (MachineInstr &MI : MBB) {
+      if (MI.getOpcode() == RISCV::SFPMAD) {
+        ChainStarts.push_back(&MI);
+        LLVM_DEBUG(dbgs() << "  Estrin: found SFPMAD: " << MI);
+      }
+    }
+
+    for (MachineInstr *MI : ChainStarts) {
+      // Skip if this instruction was already erased by a previous transform.
+      if (MI->getParent() != &MBB)
         continue;
 
       HornerChain Chain;
-      if (findHornerChain(*MBBI, MBB, Chain)) {
+      if (findHornerChain(*MI, MBB, Chain))
         Changed |= transformToEstrin(Chain, MBB);
-      }
     }
   }
 
