@@ -179,23 +179,76 @@ def : WriteRes<WriteSFPUNop,     []>;
 
 def : ReadAdvance<ReadSFPUSrc, 0>;
 
+//--- SFPU InstRW: map instructions to scheduling classes ---
+// Simple unit (1 cycle): unary arithmetic, logic, CC stack, transposes
+def : InstRW<[WriteSFPUSimple], (instrs
+    SFPDIVP2, SFPEXEXP, SFPEXMAN, SFPIADD, SFPSHFT,
+    SFPMOV, SFPABS, SFPAND, SFPOR, SFPNOT, SFPLZ,
+    SFPSETEXP, SFPSETMAN, SFPSETSGN,
+    SFPSETCC, SFPPUSHC, SFPPOPC, SFPENCC, SFPCOMPC,
+    SFPTRANSP, SFPXOR, SFPCONFIG,
+    // _lv variants
+    SFPMOV_LV, SFPABS_LV, SFPEXEXP_LV, SFPEXMAN_LV,
+    SFPDIVP2_LV, SFPLZ_LV, SFPNOT_LV,
+    SFPSETEXP_LV, SFPSETMAN_LV, SFPSETSGN_LV, SFPSHFT2_LV
+)>;
+
+// MAD unit (2 cycles): 3-operand arithmetic + immediate arithmetic
+def : InstRW<[WriteSFPUMAD], (instrs
+    SFPMAD, SFPADD, SFPMUL, SFPMULI, SFPADDI,
+    PseudoSFPMULI, PseudoSFPADDI,
+    // WH constrained variants
+    SFPMAD_WH, SFPADD_WH, SFPMUL_WH,
+    // BH-only
+    SFPMUL24,
+    // _lv variants
+    SFPMAD_LV, SFPADD_LV, SFPMUL_LV, SFPMUL24_LV
+)>;
+
+// Load unit (1 cycle)
+def : InstRW<[WriteSFPULoad], (instrs
+    SFPLOAD_BH, SFPLOADI, SFPLUT, SFPLOADMACRO_BH,
+    SFPLOAD_BH_LV,
+    // BH-only
+    SFPARECIP, SFPARECIP_LV
+)>;
+
+// Store unit (1 cycle)
+def : InstRW<[WriteSFPUStore], (instrs SFPSTORE_BH)>;
+
+// Round unit (1 cycle): stochastic rounding, type cast
+def : InstRW<[WriteSFPURound], (instrs SFP_STOCH_RND, SFPCAST, SFPCAST_LV)>;
+
+// Swap (2 cycles)
+def : InstRW<[WriteSFPUSwap], (instrs SFPSWAP)>;
+
+// LUTFP32 (2 cycles)
+def : InstRW<[WriteSFPULUTFP32], (instrs SFPLUTFP32)>;
+
+// SHFT2 (1 cycle BH, 2 cycle WH — BH model uses 1)
+def : InstRW<[WriteSFPUShft2], (instrs SFPSHFT2)>;
+
+// NOP (0 cycles, no unit)
+def : InstRW<[WriteSFPUNop], (instrs SFPNOP)>;
+
+// CC-setting BH-only instructions
+def : InstRW<[WriteSFPUSimple], (instrs SFPGT, SFPLE)>;
+
+// REPLAY (Tensix scalar instruction, not SFPU — 1 cycle)
+def : InstRW<[WriteIALU], (instrs TTREPLAY)>;
+
 //--- Unsupported extensions (Tensix doesn't have these) ---
-// F, D extensions — no FPU on Baby RISC-V
 defm : UnsupportedSchedF;
 defm : UnsupportedSchedD;
-// V extension — no RVV
 defm : UnsupportedSchedV;
-// Bit manipulation — not present
 defm : UnsupportedSchedZba;
 defm : UnsupportedSchedZbb;
 defm : UnsupportedSchedZbc;
 defm : UnsupportedSchedZbs;
 defm : UnsupportedSchedZbkb;
 defm : UnsupportedSchedZbkx;
-// FP extensions — not present
 defm : UnsupportedSchedZfa;
 defm : UnsupportedSchedZfh;
-// Misc
 defm : UnsupportedSchedSFB;
 defm : UnsupportedSchedXsfvcp;
 defm : UnsupportedSchedZvk;
@@ -294,6 +347,41 @@ def : WriteRes<WriteSFPUShft2,   [SFPUSimpleUnit]>  { let Latency = 2; } // WH: 
 def : WriteRes<WriteSFPUNop,     []>;
 def : ReadAdvance<ReadSFPUSrc, 0>;
 
+//--- SFPU InstRW for WH ---
+// Same mapping as BH except: WH load/store variants, no BH-only instructions,
+// SFPSHFT2 is 2 cycles on WH (vs 1 on BH)
+def : InstRW<[WriteSFPUSimple], (instrs
+    SFPDIVP2, SFPEXEXP, SFPEXMAN, SFPIADD, SFPSHFT,
+    SFPMOV, SFPABS, SFPAND, SFPOR, SFPNOT, SFPLZ,
+    SFPSETEXP, SFPSETMAN, SFPSETSGN,
+    SFPSETCC, SFPPUSHC, SFPPOPC, SFPENCC, SFPCOMPC,
+    SFPTRANSP, SFPXOR, SFPCONFIG,
+    SFPMOV_LV, SFPABS_LV, SFPEXEXP_LV, SFPEXMAN_LV,
+    SFPDIVP2_LV, SFPLZ_LV, SFPNOT_LV,
+    SFPSETEXP_LV, SFPSETMAN_LV, SFPSETSGN_LV, SFPSHFT2_LV
+)>;
+
+def : InstRW<[WriteSFPUMAD], (instrs
+    SFPMAD, SFPADD, SFPMUL, SFPMULI, SFPADDI,
+    PseudoSFPMULI, PseudoSFPADDI,
+    SFPMAD_WH, SFPADD_WH, SFPMUL_WH,
+    SFPMAD_LV, SFPADD_LV, SFPMUL_LV
+)>;
+
+def : InstRW<[WriteSFPULoad], (instrs
+    SFPLOAD_WH, SFPLOADI, SFPLUT, SFPLOADMACRO_BH,
+    SFPLOAD_WH_LV
+)>;
+
+def : InstRW<[WriteSFPUStore], (instrs SFPSTORE_WH)>;
+def : InstRW<[WriteSFPURound], (instrs SFP_STOCH_RND, SFPCAST, SFPCAST_LV)>;
+def : InstRW<[WriteSFPUSwap], (instrs SFPSWAP)>;
+def : InstRW<[WriteSFPULUTFP32], (instrs SFPLUTFP32)>;
+def : InstRW<[WriteSFPUShft2], (instrs SFPSHFT2)>;  // WH: 2 cycles (model above)
+def : InstRW<[WriteSFPUNop], (instrs SFPNOP)>;
+def : InstRW<[WriteIALU], (instrs TTREPLAY)>;
+
+//--- Unsupported extensions ---
 defm : UnsupportedSchedF;
 defm : UnsupportedSchedD;
 defm : UnsupportedSchedV;
