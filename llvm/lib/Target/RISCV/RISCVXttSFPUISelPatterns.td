@@ -1,5 +1,10 @@
 //===-- RISCVXttSFPUISelPatterns.td - ISel DAG Patterns -----*- tablegen -*-===//
 //
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+//
 // ISel patterns for the Tenstorrent SFPU extension.
 //
 // ALL SFPU intrinsics are handled by custom ISel in RISCVISelDAGToDAG.cpp.

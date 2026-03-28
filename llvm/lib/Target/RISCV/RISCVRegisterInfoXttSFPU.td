@@ -1,5 +1,10 @@
 //===-- RISCVRegisterInfoXttSFPU.td - SFPU Register Defs ---*- tablegen -*-===//
 //
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+//
 // Tenstorrent SFPU (Vector Unit) register classes for the XttSFPU extension.
 //
 // The SFPU has 17 registers per lane (32 lanes), each 32 bits wide.

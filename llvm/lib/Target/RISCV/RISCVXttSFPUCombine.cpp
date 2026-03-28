@@ -1,5 +1,10 @@
 //===-- RISCVXttSFPUCombine.cpp - SFPU DAG Combining ----------------------===//
 //
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+//
 // Custom DAG combining patterns for the Tenstorrent SFPU.
 // These implement the same optimizations as GCC's gimple-rvtt-combine.cc
 // but using LLVM's DAG combiner infrastructure.

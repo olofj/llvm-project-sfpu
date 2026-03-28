@@ -1,5 +1,10 @@
 //===-- RISCVXttSFPULiveness.cpp - SFPU CC Stack Liveness -----------------===//
 //
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+//
 // MachineFunctionPass implementing liveness analysis for the SFPU condition
 // code (CC) stack. Determines when SFPU instructions need the "_lv" (live
 // value) variant to preserve per-lane values in disabled lanes.

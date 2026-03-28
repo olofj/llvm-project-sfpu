@@ -1,5 +1,10 @@
 //===-- RISCVXttSFPUCluster.cpp - SFPU TTI Instruction Clustering ---------===//
 //
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+//
 // Post-RA pass that groups SFPU instructions together within basic blocks.
 //
 // The Baby RISC-V frontend fuses up to 4 adjacent TTI (Tensix Thread

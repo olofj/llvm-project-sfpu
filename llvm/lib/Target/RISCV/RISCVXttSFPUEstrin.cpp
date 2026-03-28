@@ -1,5 +1,10 @@
 //===-- RISCVXttSFPUEstrin.cpp - Horner→Estrin Polynomial Transform --------===//
 //
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+//
 // MachineFunctionPass that transforms sequential Horner polynomial evaluation
 // chains into parallel Estrin form, creating ILP that the scheduler can use
 // to fill WH's 2-cycle MAD delay slots.

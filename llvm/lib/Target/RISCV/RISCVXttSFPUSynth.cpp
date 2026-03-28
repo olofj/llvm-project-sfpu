@@ -1,5 +1,10 @@
 //===-- RISCVXttSFPUSynth.cpp - SFPU Immediate Synthesis ------------------===//
 //
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+//
 // Custom lowering pass for SFPU immediate values that exceed field widths.
 // When an immediate operand doesn't fit in the instruction encoding, this
 // pass expands it to a SFPLOADI + register-form instruction sequence.
