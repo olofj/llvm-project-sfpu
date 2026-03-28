@@ -119,6 +119,9 @@ void initializeRISCVXttSFPUPeepholePass(PassRegistry &);
 FunctionPass *createRISCVXttSFPUEstrinPass();
 void initializeRISCVXttSFPUEstrinPass(PassRegistry &);
 
+FunctionPass *createRISCVXttSFPUClusterPass();
+void initializeRISCVXttSFPUClusterPass(PassRegistry &);
+
 FunctionPass *createRISCVXttSFPUPredElidePass();
 void initializeRISCVXttSFPUPredElidePass(PassRegistry &);
 } // namespace llvm

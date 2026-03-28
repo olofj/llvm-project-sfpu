@@ -52,6 +52,7 @@ add_llvm_target(RISCVCodeGen
   RISCVRegisterInfo.cpp
   RISCVSubtarget.cpp
   RISCVTargetMachine.cpp
+  RISCVXttSFPUCluster.cpp
   RISCVXttSFPUCombine.cpp
   RISCVXttSFPUConstraints.cpp
   RISCVXttSFPUErrata.cpp

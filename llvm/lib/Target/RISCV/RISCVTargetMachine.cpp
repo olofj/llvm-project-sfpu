@@ -529,6 +529,7 @@ void RISCVPassConfig::addPreEmitPass2() {
   }
 
   // Tenstorrent SFPU post-RA passes (run before pseudo expansion)
+  addPass(createRISCVXttSFPUClusterPass());     // TTI fetch fusion: group SFPU instrs
   addPass(createRISCVXttSFPUConstraintsPass());
   addPass(createRISCVXttSFPUPredElidePass());  // Elide trivial predication
   addPass(createRISCVXttSFPUPeepholePass());
