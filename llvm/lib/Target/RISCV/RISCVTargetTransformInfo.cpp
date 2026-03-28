@@ -1683,6 +1683,18 @@ InstructionCost RISCVTTIImpl::getArithmeticInstrCost(
   // Legalize the type.
   std::pair<InstructionCost, MVT> LT = getTypeLegalizationCost(Ty);
 
+  // Tensix Baby RISC-V: MUL stalls the in-order pipeline for 2+ cycles.
+  // Report higher cost to encourage strength reduction (shift+add) for
+  // multiply-by-constant. DIV stalls for up to 33 cycles.
+  if (!LT.second.isVector() && ST->hasVendorXttSFPU()) {
+    if (Opcode == Instruction::Mul)
+      return LT.first * 3;  // MUL: 2-cycle stall + opportunity cost
+    if (Opcode == Instruction::SDiv || Opcode == Instruction::UDiv ||
+        Opcode == Instruction::SRem || Opcode == Instruction::URem)
+      return LT.first * 33; // DIV: up to 33-cycle stall
+    return LT.first;        // ALU: 1 cycle
+  }
+
   // TODO: Handle scalar type.
   if (!LT.second.isVector())
     return BaseT::getArithmeticInstrCost(Opcode, Ty, CostKind, Op1Info, Op2Info,
