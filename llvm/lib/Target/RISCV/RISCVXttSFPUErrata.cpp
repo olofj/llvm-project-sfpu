@@ -25,6 +25,7 @@
 #include "RISCV.h"
 #include "RISCVInstrInfo.h"
 #include "RISCVSubtarget.h"
+#include "RISCVXttSFPUUtil.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 
@@ -56,7 +57,6 @@ private:
   bool handleE002_SFPSHFT2ZeroFill(MachineFunction &MF);
 
   bool isSFPU2Cycle(const MachineInstr &MI) const;
-  bool isSFPUInstr(const MachineInstr &MI) const;
   bool isBHScoreboardErrata(const MachineInstr &Consumer,
                             const MachineInstr &Producer) const;
 };
@@ -87,61 +87,7 @@ bool RISCVXttSFPUErrata::isSFPU2Cycle(const MachineInstr &MI) const {
   }
 }
 
-/// Check if instruction is any SFPU instruction (opcode 0x70-0x9F range).
-bool RISCVXttSFPUErrata::isSFPUInstr(const MachineInstr &MI) const {
-  switch (MI.getOpcode()) {
-  case RISCV::SFPLOAD_BH:
-  case RISCV::SFPLOAD_WH:
-  case RISCV::SFPLOADI:
-  case RISCV::SFPSTORE_BH:
-  case RISCV::SFPSTORE_WH:
-  case RISCV::SFPLUT:
-  case RISCV::SFPMULI:
-  case RISCV::SFPADDI:
-  case RISCV::SFPDIVP2:
-  case RISCV::SFPEXEXP:
-  case RISCV::SFPEXMAN:
-  case RISCV::SFPIADD:
-  case RISCV::SFPSHFT:
-  case RISCV::SFPSETCC:
-  case RISCV::SFPMOV:
-  case RISCV::SFPMOV_REG:
-  case RISCV::SFPABS:
-  case RISCV::SFPAND:
-  case RISCV::SFPOR:
-  case RISCV::SFPNOT:
-  case RISCV::SFPLZ:
-  case RISCV::SFPSETEXP:
-  case RISCV::SFPSETMAN:
-  case RISCV::SFPMAD:
-  case RISCV::SFPADD:
-  case RISCV::SFPMUL:
-  case RISCV::SFPPUSHC:
-  case RISCV::SFPPOPC:
-  case RISCV::SFPSETSGN:
-  case RISCV::SFPENCC:
-  case RISCV::SFPCOMPC:
-  case RISCV::SFPTRANSP:
-  case RISCV::SFPXOR:
-  case RISCV::SFP_STOCH_RND:
-  case RISCV::SFPNOP:
-  case RISCV::SFPCAST:
-  case RISCV::SFPCONFIG:
-  case RISCV::SFPSWAP:
-  case RISCV::SFPLOADMACRO_BH:
-  case RISCV::SFPLOADMACRO_WH:
-  case RISCV::SFPSHFT2:
-  case RISCV::SFPLUTFP32:
-  case RISCV::SFPMUL24:
-  case RISCV::SFPARECIP:
-  case RISCV::SFPGT:
-  case RISCV::SFPLE:
-  case RISCV::SFPMOV_CONFIG:
-    return true;
-  default:
-    return false;
-  }
-}
+// RISCVXttSFPU::isSFPUInstr() is now in RISCVXttSFPUUtil.h (shared across passes).
 
 /// E-004a: Check if Consumer is a BH scoreboard errata case that needs a NOP
 /// after a 2-cycle Producer instruction.
@@ -294,12 +240,12 @@ bool RISCVXttSFPUErrata::handleE004_PipelineHazards(MachineFunction &MF) {
       if (IsStaticDelay) {
         // Static delay: always need NOP if next is any non-NOP SFPU instruction.
         // This applies on BOTH BH and WH.
-        if (NextMI != MBBE && isSFPUInstr(*NextMI))
+        if (NextMI != MBBE && RISCVXttSFPU::isSFPUInstr(*NextMI))
           NeedNop = true;
       } else if (!IsBH) {
         // Dynamic delay on WH (no scoreboarding): need NOP if next SFPU
         // instruction reads our destination register.
-        if (NextMI != MBBE && isSFPUInstr(*NextMI)) {
+        if (NextMI != MBBE && RISCVXttSFPU::isSFPUInstr(*NextMI)) {
           for (const MachineOperand &Def : MI.defs()) {
             if (!Def.isReg())
               continue;
@@ -316,7 +262,7 @@ bool RISCVXttSFPUErrata::handleE004_PipelineHazards(MachineFunction &MF) {
       } else {
         // Dynamic delay on BH: scoreboard handles MOST cases, but E-004a
         // errata cases need NOP. See ERRATA.md E-004a, tt-metal #14591.
-        if (NextMI != MBBE && isSFPUInstr(*NextMI) &&
+        if (NextMI != MBBE && RISCVXttSFPU::isSFPUInstr(*NextMI) &&
             isBHScoreboardErrata(*NextMI, MI))
           NeedNop = true;
       }

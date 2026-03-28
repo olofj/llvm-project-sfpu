@@ -196,7 +196,6 @@ def : InstRW<[WriteSFPUSimple], (instrs
 // MAD unit (2 cycles): 3-operand arithmetic + immediate arithmetic
 def : InstRW<[WriteSFPUMAD], (instrs
     SFPMAD, SFPADD, SFPMUL, SFPMULI, SFPADDI,
-    PseudoSFPMULI, PseudoSFPADDI,
     // WH constrained variants
     SFPMAD_WH, SFPADD_WH, SFPMUL_WH,
     // BH-only
@@ -363,7 +362,6 @@ def : InstRW<[WriteSFPUSimple], (instrs
 
 def : InstRW<[WriteSFPUMAD], (instrs
     SFPMAD, SFPADD, SFPMUL, SFPMULI, SFPADDI,
-    PseudoSFPMULI, PseudoSFPADDI,
     SFPMAD_WH, SFPADD_WH, SFPMUL_WH,
     SFPMAD_LV, SFPADD_LV, SFPMUL_LV
 )>;

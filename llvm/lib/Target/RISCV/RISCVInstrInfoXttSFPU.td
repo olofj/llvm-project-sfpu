@@ -439,20 +439,10 @@ def SFPADDI : SFPUImm16<0x75, "sfpaddi",
     "$lreg_dest, $imm16, $mod1"> {
 }
 
-// Pseudo variants with tied src/dest for ISel (read-modify-write semantics).
-// The intrinsic passes the dest register as an input because it's both read and
-// written. The Constraints tie ensures regalloc keeps src and dest in the same
-// physical register.
-let Constraints = "$lreg_dest = $lreg_src" in {
-  def PseudoSFPMULI : SFPUImm16<0x74, "sfpmuli",
-      (outs SFPURegs:$lreg_dest),
-      (ins SFPURegs:$lreg_src, uimm16_sfpu:$imm16, uimm4_sfpu:$mod1),
-      "$lreg_dest, $imm16, $mod1">;
-  def PseudoSFPADDI : SFPUImm16<0x75, "sfpaddi",
-      (outs SFPURegs:$lreg_dest),
-      (ins SFPURegs:$lreg_src, uimm16_sfpu:$imm16, uimm4_sfpu:$mod1),
-      "$lreg_dest, $imm16, $mod1">;
-}
+// Note: PseudoSFPMULI/PseudoSFPADDI with tied src/dest constraints were
+// previously defined here for read-modify-write semantics. They are not
+// used by the custom ISel (which uses SFPMULI/SFPADDI directly) and have
+// been removed to avoid dead instruction definitions.
 
 //--- Standard Unary Instructions (simple unit, 1 cycle) ---
 

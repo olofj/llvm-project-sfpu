@@ -33,6 +33,7 @@
 #include "RISCV.h"
 #include "RISCVInstrInfo.h"
 #include "RISCVSubtarget.h"
+#include "RISCVXttSFPUUtil.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 
@@ -58,7 +59,6 @@ private:
   const RISCVSubtarget *STI = nullptr;
   const RISCVInstrInfo *TII = nullptr;
 
-  bool isSFPUInstr(const MachineInstr &MI) const;
   bool canHoist(const MachineInstr &MI,
                 MachineBasicBlock::iterator InsertBefore,
                 const MachineBasicBlock &MBB) const;
@@ -69,54 +69,7 @@ private:
 
 char RISCVXttSFPUCluster::ID = 0;
 
-bool RISCVXttSFPUCluster::isSFPUInstr(const MachineInstr &MI) const {
-  unsigned Opc = MI.getOpcode();
-  // SFPU opcodes are in the Tensix custom encoding space.
-  // Check by opcode ranges defined in RISCVInstrInfoXttSFPU.td.
-  switch (Opc) {
-  case RISCV::SFPLOAD_BH: case RISCV::SFPLOAD_WH:
-  case RISCV::SFPLOADI:
-  case RISCV::SFPSTORE_BH: case RISCV::SFPSTORE_WH:
-  case RISCV::SFPLUT: case RISCV::SFPLUTFP32:
-  case RISCV::SFPLOADMACRO_BH:
-  case RISCV::SFPMAD: case RISCV::SFPMAD_WH:
-  case RISCV::SFPADD: case RISCV::SFPADD_WH:
-  case RISCV::SFPMUL: case RISCV::SFPMUL_WH:
-  case RISCV::SFPMULI: case RISCV::SFPADDI:
-  case RISCV::SFPMOV: case RISCV::SFPABS:
-  case RISCV::SFPEXEXP: case RISCV::SFPEXMAN:
-  case RISCV::SFPDIVP2: case RISCV::SFPIADD:
-  case RISCV::SFPSHFT: case RISCV::SFPSETCC:
-  case RISCV::SFPAND: case RISCV::SFPOR:
-  case RISCV::SFPNOT: case RISCV::SFPLZ:
-  case RISCV::SFPSETEXP: case RISCV::SFPSETMAN:
-  case RISCV::SFPSETSGN: case RISCV::SFPCAST:
-  case RISCV::SFPSWAP: case RISCV::SFPSHFT2:
-  case RISCV::SFPTRANSP: case RISCV::SFPXOR:
-  case RISCV::SFP_STOCH_RND:
-  case RISCV::SFPCONFIG:
-  case RISCV::SFPNOP:
-  case RISCV::SFPPUSHC: case RISCV::SFPPOPC: case RISCV::SFPCOMPC:
-  case RISCV::SFPENCC:
-  case RISCV::SFPMUL24: case RISCV::SFPARECIP:
-  case RISCV::SFPGT: case RISCV::SFPLE:
-  // _lv variants
-  case RISCV::SFPMOV_LV: case RISCV::SFPABS_LV:
-  case RISCV::SFPMAD_LV: case RISCV::SFPADD_LV: case RISCV::SFPMUL_LV:
-  case RISCV::SFPLOAD_BH_LV: case RISCV::SFPLOAD_WH_LV:
-  case RISCV::SFPEXEXP_LV: case RISCV::SFPEXMAN_LV:
-  case RISCV::SFPDIVP2_LV: case RISCV::SFPCAST_LV:
-  case RISCV::SFPLZ_LV: case RISCV::SFPNOT_LV:
-  case RISCV::SFPSETEXP_LV: case RISCV::SFPSETMAN_LV:
-  case RISCV::SFPSETSGN_LV: case RISCV::SFPSHFT2_LV:
-  case RISCV::SFPARECIP_LV: case RISCV::SFPMUL24_LV:
-  // Tensix instructions emitted as .word
-  case RISCV::TTREPLAY:
-    return true;
-  default:
-    return false;
-  }
-}
+// RISCVXttSFPU::isSFPUInstr() is now in RISCVXttSFPUUtil.h (shared with Errata pass).
 
 /// Check if MI can be safely hoisted above InsertBefore without violating
 /// data dependencies. Only considers register deps within the same block.
@@ -172,7 +125,7 @@ bool RISCVXttSFPUCluster::clusterBlock(MachineBasicBlock &MBB) {
   // Work from the beginning of the block forward.
   for (auto MBBI = MBB.begin(), MBBE = MBB.end(); MBBI != MBBE; ) {
     // Find start of an SFPU cluster
-    if (!isSFPUInstr(*MBBI)) {
+    if (!RISCVXttSFPU::isSFPUInstr(*MBBI)) {
       ++MBBI;
       continue;
     }
@@ -184,7 +137,7 @@ bool RISCVXttSFPUCluster::clusterBlock(MachineBasicBlock &MBB) {
     auto ClusterEnd = MBBI;
     unsigned SFPUCount = 0;
     while (ClusterEnd != MBBE) {
-      if (isSFPUInstr(*ClusterEnd)) {
+      if (RISCVXttSFPU::isSFPUInstr(*ClusterEnd)) {
         SFPUCount++;
         ++ClusterEnd;
       } else if (ClusterEnd->isDebugInstr()) {
@@ -195,7 +148,7 @@ bool RISCVXttSFPUCluster::clusterBlock(MachineBasicBlock &MBB) {
         bool MoreSFPU = false;
         unsigned ScalarGap = 0;
         while (++Lookahead != MBBE && ScalarGap < 4) {
-          if (isSFPUInstr(*Lookahead)) {
+          if (RISCVXttSFPU::isSFPUInstr(*Lookahead)) {
             MoreSFPU = true;
             break;
           }
@@ -212,7 +165,7 @@ bool RISCVXttSFPUCluster::clusterBlock(MachineBasicBlock &MBB) {
     // above the cluster start.
     for (auto I = std::next(MachineBasicBlock::iterator(ClusterStart));
          I != ClusterEnd; ) {
-      if (isSFPUInstr(*I) || I->isDebugInstr()) {
+      if (RISCVXttSFPU::isSFPUInstr(*I) || I->isDebugInstr()) {
         ++I;
         continue;
       }
