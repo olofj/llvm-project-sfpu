@@ -104,9 +104,9 @@ bool RISCVXttSFPUConstraints::runOnMachineFunction(MachineFunction &MF) {
 
   TII = STI->getInstrInfo();
 
-  verifyWHConstraints(MF);
+  bool Changed = verifyWHConstraints(MF);
 
-  return false;
+  return Changed;
 }
 
 INITIALIZE_PASS(RISCVXttSFPUConstraints, DEBUG_TYPE,

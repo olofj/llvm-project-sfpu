@@ -1619,8 +1619,9 @@ void RISCVDAGToDAGISel::Select(SDNode *Node) {
 
     case Intrinsic::riscv_tt_sfpmad:
     case Intrinsic::riscv_tt_sfpmul:
-    case Intrinsic::riscv_tt_sfpadd: {
-      // 3-Op: (src_a, src_b, src_c, mod1) → SFPMAD/SFPMUL/SFPADD
+    case Intrinsic::riscv_tt_sfpadd:
+    case Intrinsic::riscv_tt_sfpmul24: {
+      // 3-Op: (src_a, src_b, src_c, mod1)
       SDValue SrcA = SFPU_GET_REG_OR_CONST(Node->getOperand(1));
       SDValue SrcB = SFPU_GET_REG_OR_CONST(Node->getOperand(2));
       SDValue SrcC = SFPU_GET_REG_OR_CONST(Node->getOperand(3));
@@ -1630,6 +1631,8 @@ void RISCVDAGToDAGISel::Select(SDNode *Node) {
         Opc = RISCV::SFPMAD;
       else if (IntNo == Intrinsic::riscv_tt_sfpmul)
         Opc = RISCV::SFPMUL;
+      else if (IntNo == Intrinsic::riscv_tt_sfpmul24)
+        Opc = RISCV::SFPMUL24;
       else
         Opc = RISCV::SFPADD;
       // On WH, use constrained variants
@@ -1667,7 +1670,10 @@ void RISCVDAGToDAGISel::Select(SDNode *Node) {
     case Intrinsic::riscv_tt_sfpsetexp:
     case Intrinsic::riscv_tt_sfpsetman:
     case Intrinsic::riscv_tt_sfpsetsgn:
-    case Intrinsic::riscv_tt_sfpnot: {
+    case Intrinsic::riscv_tt_sfpnot:
+    case Intrinsic::riscv_tt_sfparecip:
+    case Intrinsic::riscv_tt_sfptransp:
+    case Intrinsic::riscv_tt_sfpxor: {
       // Standard Unary: (src, imm12, mod1) → SFPUUnaryReg
       SDValue Src = SFPU_GET_REG_OR_CONST(Node->getOperand(1));
       SDValue Imm = SFPU_IMM(Node->getOperand(2));
@@ -1684,6 +1690,9 @@ void RISCVDAGToDAGISel::Select(SDNode *Node) {
       case Intrinsic::riscv_tt_sfpsetman: Opc = RISCV::SFPSETMAN; break;
       case Intrinsic::riscv_tt_sfpsetsgn: Opc = RISCV::SFPSETSGN; break;
       case Intrinsic::riscv_tt_sfpnot:    Opc = RISCV::SFPNOT; break;
+      case Intrinsic::riscv_tt_sfparecip: Opc = RISCV::SFPARECIP; break;
+      case Intrinsic::riscv_tt_sfptransp: Opc = RISCV::SFPTRANSP; break;
+      case Intrinsic::riscv_tt_sfpxor:    Opc = RISCV::SFPXOR; break;
       default: llvm_unreachable("unhandled sfpu unary");
       }
       MachineSDNode *Res = CurDAG->getMachineNode(
@@ -1930,29 +1939,26 @@ void RISCVDAGToDAGISel::Select(SDNode *Node) {
     // SFPU 3-Operand arithmetic (W_CHAIN due to IntrHasSideEffects)
     case Intrinsic::riscv_tt_sfpmad:
     case Intrinsic::riscv_tt_sfpmul:
-    case Intrinsic::riscv_tt_sfpadd: {
+    case Intrinsic::riscv_tt_sfpadd:
+    case Intrinsic::riscv_tt_sfpmul24: {
       SDValue Chain = Node->getOperand(0);
-      // Operands: chain, intno, src_a, src_b, src_c, mod1
       SDValue SrcA = Node->getOperand(2);
       SDValue SrcB = Node->getOperand(3);
       SDValue SrcC = Node->getOperand(4);
       SDValue Mod1 = SFPU_IMM(Node->getOperand(5));
-      // Convert constant register indices to physical register refs
       if (auto *C = dyn_cast<ConstantSDNode>(SrcA))
         SrcA = CurDAG->getRegister(RISCV::L0 + C->getZExtValue(), MVT::i32);
       if (auto *C = dyn_cast<ConstantSDNode>(SrcB))
         SrcB = CurDAG->getRegister(RISCV::L0 + C->getZExtValue(), MVT::i32);
       if (auto *C = dyn_cast<ConstantSDNode>(SrcC))
         SrcC = CurDAG->getRegister(RISCV::L0 + C->getZExtValue(), MVT::i32);
-      // Use generic (unconstrained) opcodes for custom ISel — the physical
-      // register placement is already correct. The _WH constrained variants
-      // are for Pat<>-based selection where the RA needs tying hints.
-      // Custom ISel bypasses the two-address pass issue with physical regs.
       unsigned Opc;
       if (IntNo == Intrinsic::riscv_tt_sfpmad)
         Opc = RISCV::SFPMAD;
       else if (IntNo == Intrinsic::riscv_tt_sfpmul)
         Opc = RISCV::SFPMUL;
+      else if (IntNo == Intrinsic::riscv_tt_sfpmul24)
+        Opc = RISCV::SFPMUL24;
       else
         Opc = RISCV::SFPADD;
       MachineSDNode *Res = CurDAG->getMachineNode(
@@ -1974,9 +1980,11 @@ void RISCVDAGToDAGISel::Select(SDNode *Node) {
     case Intrinsic::riscv_tt_sfpsetsgn:
     case Intrinsic::riscv_tt_sfpnot:
     case Intrinsic::riscv_tt_sfpiadd:
-    case Intrinsic::riscv_tt_sfpshft: {
+    case Intrinsic::riscv_tt_sfpshft:
+    case Intrinsic::riscv_tt_sfparecip:
+    case Intrinsic::riscv_tt_sfptransp:
+    case Intrinsic::riscv_tt_sfpxor: {
       SDValue Chain = Node->getOperand(0);
-      // Operands: chain, intno, src, imm12, mod1
       SDValue Src = Node->getOperand(2);
       SDValue Imm = SFPU_IMM(Node->getOperand(3));
       SDValue Mod1 = SFPU_IMM(Node->getOperand(4));
@@ -1997,6 +2005,9 @@ void RISCVDAGToDAGISel::Select(SDNode *Node) {
       case Intrinsic::riscv_tt_sfpnot:    Opc = RISCV::SFPNOT; break;
       case Intrinsic::riscv_tt_sfpiadd:   Opc = RISCV::SFPIADD; break;
       case Intrinsic::riscv_tt_sfpshft:   Opc = RISCV::SFPSHFT; break;
+      case Intrinsic::riscv_tt_sfparecip: Opc = RISCV::SFPARECIP; break;
+      case Intrinsic::riscv_tt_sfptransp: Opc = RISCV::SFPTRANSP; break;
+      case Intrinsic::riscv_tt_sfpxor:    Opc = RISCV::SFPXOR; break;
       default: llvm_unreachable("unhandled sfpu unary");
       }
       MachineSDNode *Res = CurDAG->getMachineNode(
@@ -2051,6 +2062,25 @@ void RISCVDAGToDAGISel::Select(SDNode *Node) {
       return;
     }
 
+    // SFP_STOCH_RND (W_CHAIN): (rnd_mode, imm5, src_b, src_c, mod1)
+    case Intrinsic::riscv_tt_sfpstochrnd: {
+      SDValue Chain = Node->getOperand(0);
+      SDValue RndMode = SFPU_IMM(Node->getOperand(2));
+      SDValue Imm5 = SFPU_IMM(Node->getOperand(3));
+      SDValue SrcB = Node->getOperand(4);
+      SDValue SrcC = Node->getOperand(5);
+      SDValue Mod1 = SFPU_IMM(Node->getOperand(6));
+      if (auto *C = dyn_cast<ConstantSDNode>(SrcB))
+        SrcB = CurDAG->getRegister(RISCV::L0 + C->getZExtValue(), MVT::i32);
+      if (auto *C = dyn_cast<ConstantSDNode>(SrcC))
+        SrcC = CurDAG->getRegister(RISCV::L0 + C->getZExtValue(), MVT::i32);
+      MachineSDNode *Res = CurDAG->getMachineNode(
+          RISCV::SFP_STOCH_RND, DL, MVT::i32, MVT::Other,
+          {RndMode, Imm5, SrcB, SrcC, Mod1, Chain});
+      ReplaceNode(Node, Res);
+      return;
+    }
+
     // SFPLUTFP32: (src_reg, mod1) — 2 args only
     case Intrinsic::riscv_tt_sfplutfp32: {
       SDValue Chain = Node->getOperand(0);
@@ -2063,6 +2093,8 @@ void RISCVDAGToDAGISel::Select(SDNode *Node) {
       ReplaceNode(Node, Res);
       return;
     }
+
+    // sfpstochrnd handled in W_CHAIN section above
 
     // SFPLUT: (mod0, dest_reg_addr) — 2 imm args
     case Intrinsic::riscv_tt_sfplut: {
