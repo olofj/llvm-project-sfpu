@@ -1597,13 +1597,26 @@ void RISCVDAGToDAGISel::Select(SDNode *Node) {
     default:
       break;
 
-    // --- Tenstorrent SFPU value-producing intrinsics ---
-    // These need custom ISel because their register operands are passed as
-    // i32 constants (register indices like 9 for L9), but the MachineInstr
-    // needs actual SFPUAllRegs physical register references.
+    // --- Tenstorrent SFPU custom ISel ---
     //
-    // Helper: convert i32 constant to SFPU LReg physical register.
-    // SFPU L-registers are L0-L16 (RISCV::L0 + index).
+    // ALL SFPU intrinsics use custom ISel (no Pat<> patterns). This is
+    // necessary because:
+    //   1. Register operands are i32 constants (register indices, e.g. 9→L9)
+    //      that must be lowered to physical SFPUAllRegs references.
+    //   2. Most "immediate" parameters lack ImmArg (sfpi.h computes them at
+    //      runtime via __f32asui(), bitwise OR, etc.) so they arrive as
+    //      regular SDValues, not TargetConstants.
+    //   3. All intrinsics have IntrHasSideEffects, producing INTRINSIC_W_CHAIN
+    //      nodes (not INTRINSIC_WO_CHAIN). Both node types are handled below.
+    //
+    // BH vs WH selection: handlers check Subtarget->hasVendorXttSFPUBH()
+    // to select the correct instruction variant (e.g., SFPLOAD_BH vs
+    // SFPLOAD_WH, which have different addr_mode widths).
+    //
+    // Helper macros (undef'd after last use):
+    //   SFPU_LREG(idx)           — i32 constant → physical L-register
+    //   SFPU_GET_REG_OR_CONST(op) — constant→phys reg, else passthrough
+    //   SFPU_IMM(op)             — constant→TargetConstant, else passthrough
 #define SFPU_LREG(idx) CurDAG->getRegister(RISCV::L0 + (idx), MVT::i32)
 #define SFPU_GET_REG_OR_CONST(op) \
     (isa<ConstantSDNode>(op) \
