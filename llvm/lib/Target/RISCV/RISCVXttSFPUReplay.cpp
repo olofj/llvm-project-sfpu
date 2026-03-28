@@ -283,12 +283,8 @@ bool RISCVXttSFPUReplay::runOnMachineFunction(MachineFunction &MF) {
         MachineInstr *FirstInOriginal = SFPUInstrs[Cand->StartIdx];
         DebugLoc DL = FirstInOriginal->getDebugLoc();
 
-        // Encode: (start_idx << 14) | (len << 4) | (0 << 1) | (1 << 0)
-        unsigned ReplayLoadWord = (Slot << 14) | (Cand->Length << 4) | 0x01;
-
-        // TTREPLAY is defined in RISCVInstrInfoXttSFPU.td (opcode 0x04).
+        // TTREPLAY encoding: (slot << 14) | (len << 4) | (ewl << 1) | load_mode
         // Emit REPLAY in "load" mode: record following instructions.
-        (void)ReplayLoadWord;
         BuildMI(MBB, *FirstInOriginal, DL, TII->get(RISCV::TTREPLAY))
             .addImm(Slot)            // start_idx
             .addImm(Cand->Length)    // len
@@ -304,11 +300,7 @@ bool RISCVXttSFPUReplay::runOnMachineFunction(MachineFunction &MF) {
         MachineInstr *FirstInClone = SFPUInstrs[CloneStart];
         DebugLoc DL = FirstInClone->getDebugLoc();
 
-        // Encode: (start_idx << 14) | (len << 4) | (1 << 1) | (0 << 0)
-        unsigned ReplayExecWord = (Slot << 14) | (Cand->Length << 4) | 0x02;
-
         // Insert REPLAY in "execute" mode before the clone, then delete it.
-        (void)ReplayExecWord;
         BuildMI(MBB, *FirstInClone, DL, TII->get(RISCV::TTREPLAY))
             .addImm(Slot)            // start_idx
             .addImm(Cand->Length)    // len

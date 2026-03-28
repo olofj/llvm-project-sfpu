@@ -1715,7 +1715,7 @@ void RISCVDAGToDAGISel::Select(SDNode *Node) {
       return;
     }
 
-// SFPU macros undef'd at end of file (used by _lv handlers below too)
+// SFPU macros undef'd after INTRINSIC_VOID section (used by all SFPU handlers)
 
     case Intrinsic::riscv_vmsgeu:
     case Intrinsic::riscv_vmsge: {
@@ -2773,6 +2773,12 @@ void RISCVDAGToDAGISel::Select(SDNode *Node) {
     }
     break;
   }
+
+  // End of Tenstorrent SFPU custom ISel — undef helper macros
+#undef SFPU_LREG
+#undef SFPU_GET_REG_OR_CONST
+#undef SFPU_IMM
+
   case ISD::BITCAST: {
     MVT SrcVT = Node->getOperand(0).getSimpleValueType();
     // Just drop bitcasts between vectors if both are fixed or both are

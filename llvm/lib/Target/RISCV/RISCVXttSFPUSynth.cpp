@@ -24,6 +24,7 @@
 #include "RISCVSubtarget.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
+#include "llvm/Support/raw_ostream.h"
 
 using namespace llvm;
 
@@ -154,9 +155,15 @@ bool RISCVXttSFPUSynth::expandImmediate(MachineInstr &MI, unsigned ImmOpIdx,
     // Replace instruction with register-form variant using L7
     if (substituteRegForm(MI, RISCV::L7))
       return true;
-    // No register-form: truncate the immediate (best effort)
-    ImmOp.setImm(ImmVal & MaxVal);
-    LLVM_DEBUG(dbgs() << "  WARNING: truncated imm (no register-form variant)\n");
+    // No register-form variant — cannot silently truncate, report error.
+    {
+      std::string Msg;
+      raw_string_ostream OS(Msg);
+      OS << "SFPU immediate " << ImmVal << " exceeds "
+         << FieldWidth << "-bit field; no register-form exists";
+      MI.emitError(OS.str());
+    }
+    return false;
   } else {
     // Value > 16 bits: SFPLOADI (upper 16) + SFPIADD (lower 12)
     unsigned Upper = (ImmVal >> 12) & 0xFFFF;
@@ -180,9 +187,14 @@ bool RISCVXttSFPUSynth::expandImmediate(MachineInstr &MI, unsigned ImmOpIdx,
     // Replace instruction with register-form variant using L7
     if (substituteRegForm(MI, RISCV::L7))
       return true;
-    // No register-form: truncate (best effort)
-    ImmOp.setImm(ImmVal & MaxVal);
-    LLVM_DEBUG(dbgs() << "  WARNING: truncated wide imm (no register-form)\n");
+    {
+      std::string Msg;
+      raw_string_ostream OS(Msg);
+      OS << "SFPU wide immediate " << ImmVal << " exceeds "
+         << FieldWidth << "-bit field; no register-form exists";
+      MI.emitError(OS.str());
+    }
+    return false;
   }
 
   return true;
