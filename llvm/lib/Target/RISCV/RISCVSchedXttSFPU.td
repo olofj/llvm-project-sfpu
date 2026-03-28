@@ -1,35 +1,54 @@
-//===-- RISCVSchedXttSFPU.td - SFPU Scheduling Defs --------*- tablegen -*-===//
+//===-- RISCVSchedXttSFPU.td - Tensix Scheduling Model ------*- tablegen -*-===//
 //
-// Scheduling write/read class definitions for the Tenstorrent SFPU.
+// Scheduling model for the Tenstorrent Tensix tile's Baby RISC-V scalar
+// pipeline and SFPU vector unit.
 //
-// The full scheduling model (TensixBHModel, TensixWHModel with ProcResource
-// definitions and WriteRes bindings) is preserved in
-// llvm-project/llvm/lib/Target/RISCV/RISCVSchedXttSFPU.td for future use.
+// The Baby RISC-V is a single-issue, in-order RV32IMAC core. It dispatches
+// Tensix instructions (SFPU, FPU, matrix) by writing 32-bit instruction
+// words to a memory-mapped FIFO. Better scalar scheduling = fewer pipeline
+// bubbles in the dispatch path.
 //
-// For now, we define only the SchedWrite and SchedRead classes so that
-// SFPU instruction definitions can carry Sched annotations. The actual
-// instruction scheduling is handled by our custom SFPU passes
-// (RISCVXttSFPUErrata, RISCVXttSFPUReplay, etc.) which have accurate
-// pipeline models for both BH and WH.
+// Scalar pipeline (PIPELINE.md §2):
+//   ALU:     1 cycle (EX1 stage, full forwarding)
+//   MUL:     2 cycles (pipeline-stalling — blocks all issue)
+//   DIV:     2-33 cycles (pipeline-stalling, iterative)
+//   Load:    2 cycles (local data RAM) to 12 cycles (L1 SRAM)
+//   Store:   1 cycle (store queue absorbs immediately)
+//   Branch:  1 cycle + 5-cycle mispredict penalty
 //
-// To enable the full LLVM scheduling model in the future, the Tensix
-// SchedMachineModel definitions need WriteRes entries for ALL standard
-// RISC-V SchedWrite classes (WriteIALU, WriteILFL, etc.) — approximately
-// 200+ entries — since LLVM validates completeness even with
-// CompleteModel = 0 when a processor is bound to the model.
+// SFPU pipeline (FUNCTIONAL_UNITS.md §3):
+//   Simple:  1 cycle (MOV, logic, comparisons, CC stack)
+//   MAD:     2 cycles (SFPMAD, SFPADD, SFPMUL, SFPMULI, SFPADDI)
+//   Load:    1 cycle (SFPLOAD, SFPLOADI)
+//   Store:   1 cycle (SFPSTORE)
+//   Swap:    2 cycles (SFPSWAP)
+//   LUTFP32: 2 cycles (SFPLUTFP32)
 //
-// Reference: ttsim-analysis/FUNCTIONAL_UNITS.md Section 3.1
-//            ttsim-analysis/ERRATA.md E-004 (pipeline hazards)
+// Reference: ttsim-analysis/PIPELINE.md, FUNCTIONAL_UNITS.md, rvtt-tune.md
 //
 //===----------------------------------------------------------------------===//
 
-// --- SFPU SchedWrite classes ---
-// These are used in Sched<[...]> annotations on SFPU instruction defs.
-// Latency semantics (for reference — not enforced by scheduler currently):
-//
-//   1-cycle: WriteSFPUSimple, WriteSFPULoad, WriteSFPUStore, WriteSFPURound, WriteSFPUNop
-//   2-cycle: WriteSFPUMAD, WriteSFPUSwap, WriteSFPULUTFP32
-//   1-2 cycle: WriteSFPUShft2 (1 on BH, 2 on WH for SHFLSHR1)
+//===----------------------------------------------------------------------===//
+// Processor Resources
+//===----------------------------------------------------------------------===//
+
+// Scalar Baby RISC-V pipeline
+def TensixUnitALU    : ProcResource<1> { let BufferSize = 0; }  // EX1: ALU, shifts, compares
+def TensixUnitMem    : ProcResource<1> { let BufferSize = 0; }  // Load/store unit
+def TensixUnitBranch : ProcResource<1> { let BufferSize = 0; }  // Branch resolution
+def TensixUnitIMul   : ProcResource<1> { let BufferSize = 0; }  // MUL (stalls pipeline)
+def TensixUnitIDiv   : ProcResource<1> { let BufferSize = 0; }  // DIV (stalls pipeline)
+
+// SFPU functional units
+def SFPULoadUnit   : ProcResource<1> { let BufferSize = 0; }
+def SFPUSimpleUnit : ProcResource<1> { let BufferSize = 0; }
+def SFPUMADUnit    : ProcResource<1> { let BufferSize = 0; }
+def SFPURoundUnit  : ProcResource<1> { let BufferSize = 0; }
+def SFPUStoreUnit  : ProcResource<1> { let BufferSize = 0; }
+
+//===----------------------------------------------------------------------===//
+// SchedWrite / SchedRead Classes (SFPU)
+//===----------------------------------------------------------------------===//
 
 def WriteSFPUSimple  : SchedWrite;  // MOV, logic, comparisons, CC stack, shifts
 def WriteSFPULoad    : SchedWrite;  // SFPLOAD, SFPLOADI, SFPLUT, SFPLOADMACRO
@@ -40,6 +59,250 @@ def WriteSFPUSwap    : SchedWrite;  // SFPSWAP
 def WriteSFPULUTFP32 : SchedWrite;  // SFPLUTFP32
 def WriteSFPUShft2   : SchedWrite;  // SFPSHFT2
 def WriteSFPUNop     : SchedWrite;  // SFPNOP
+def ReadSFPUSrc      : SchedRead;
 
-// --- SFPU SchedRead class ---
-def ReadSFPUSrc : SchedRead;
+//===----------------------------------------------------------------------===//
+// Blackhole Scheduling Model
+//===----------------------------------------------------------------------===//
+
+def TensixBHScalarModel : SchedMachineModel {
+  let IssueWidth = 1;            // Single-issue in-order
+  let MicroOpBufferSize = 0;     // No reorder buffer
+  let LoadLatency = 2;           // Default: local data RAM (2 cycles)
+  let MispredictPenalty = 5;     // 5-cycle frontend refill
+  let CompleteModel = false;     // Allow instructions without sched info
+  let PostRAScheduler = 1;       // Enable post-RA scheduling
+  let UnsupportedFeatures = [HasStdExtZbkb, HasStdExtZbkc, HasStdExtZbkx,
+                             HasStdExtZcmt, HasStdExtZknd, HasStdExtZkne,
+                             HasStdExtZknh, HasStdExtZksed, HasStdExtZksh,
+                             HasStdExtZkr, HasVInstructions, HasVInstructionsI64];
+}
+
+let SchedModel = TensixBHScalarModel in {
+
+//--- Scalar WriteRes entries ---
+
+// Branch / jump (1 cycle, resolved in EX1)
+def : WriteRes<WriteJmp,  [TensixUnitBranch]>;
+def : WriteRes<WriteJal,  [TensixUnitBranch]>;
+def : WriteRes<WriteJalr, [TensixUnitBranch]>;
+
+// Integer ALU (1 cycle)
+def : WriteRes<WriteIALU,       [TensixUnitALU]>;
+def : WriteRes<WriteIALU32,     [TensixUnitALU]>;
+def : WriteRes<WriteShiftImm,   [TensixUnitALU]>;
+def : WriteRes<WriteShiftImm32, [TensixUnitALU]>;
+def : WriteRes<WriteShiftReg,   [TensixUnitALU]>;
+def : WriteRes<WriteShiftReg32, [TensixUnitALU]>;
+
+// Integer Multiply (2 cycles, stalls pipeline)
+def : WriteRes<WriteIMul,   [TensixUnitIMul]> { let Latency = 2; let ReleaseAtCycles = [2]; }
+def : WriteRes<WriteIMul32, [TensixUnitIMul]> { let Latency = 2; let ReleaseAtCycles = [2]; }
+
+// Integer Divide (2-33 cycles, stalls pipeline)
+def : WriteRes<WriteIDiv,   [TensixUnitIDiv]> { let Latency = 33; let ReleaseAtCycles = [33]; }
+def : WriteRes<WriteIDiv32, [TensixUnitIDiv]> { let Latency = 33; let ReleaseAtCycles = [33]; }
+def : WriteRes<WriteIRem,   [TensixUnitIDiv]> { let Latency = 33; let ReleaseAtCycles = [33]; }
+def : WriteRes<WriteIRem32, [TensixUnitIDiv]> { let Latency = 33; let ReleaseAtCycles = [33]; }
+
+// Load (2 cycles default — local data RAM; L1 is 8-12 but we use conservative default)
+def : WriteRes<WriteLDB, [TensixUnitMem]> { let Latency = 2; }
+def : WriteRes<WriteLDH, [TensixUnitMem]> { let Latency = 2; }
+def : WriteRes<WriteLDW, [TensixUnitMem]> { let Latency = 2; }
+
+// Store (1 cycle — store queue absorbs immediately)
+def : WriteRes<WriteSTB, [TensixUnitMem]>;
+def : WriteRes<WriteSTH, [TensixUnitMem]>;
+def : WriteRes<WriteSTW, [TensixUnitMem]>;
+
+// Atomics (12 cycles for L1 atomic operations)
+def : WriteRes<WriteAtomicW,   [TensixUnitMem]> { let Latency = 12; let ReleaseAtCycles = [12]; }
+def : WriteRes<WriteAtomicD,   [TensixUnitMem]> { let Latency = 12; let ReleaseAtCycles = [12]; } // rv32: unused
+def : WriteRes<WriteAtomicLDW, [TensixUnitMem]> { let Latency = 12; let ReleaseAtCycles = [12]; }
+def : WriteRes<WriteAtomicLDD, [TensixUnitMem]> { let Latency = 12; let ReleaseAtCycles = [12]; } // rv32: unused
+def : WriteRes<WriteAtomicSTW, [TensixUnitMem]>;
+def : WriteRes<WriteAtomicSTD, [TensixUnitMem]>; // rv32: unused
+
+// 64-bit load/store (rv32: unused but required by scheduler model for A extension)
+def : WriteRes<WriteLDD, [TensixUnitMem]> { let Latency = 2; }
+def : WriteRes<WriteSTD, [TensixUnitMem]>;
+
+// CSR / NOP (1 cycle, no functional unit)
+def : WriteRes<WriteCSR, []>;
+def : WriteRes<WriteNop, []>;
+
+// COPY pseudo (modeled as ALU)
+def : InstRW<[WriteIALU], (instrs COPY)>;
+
+//--- Scalar ReadAdvance entries (all operands read at issue time) ---
+def : ReadAdvance<ReadJmp, 0>;
+def : ReadAdvance<ReadJalr, 0>;
+def : ReadAdvance<ReadCSR, 0>;
+def : ReadAdvance<ReadStoreData, 0>;
+def : ReadAdvance<ReadMemBase, 0>;
+def : ReadAdvance<ReadIALU, 0>;
+def : ReadAdvance<ReadIALU32, 0>;
+def : ReadAdvance<ReadShiftImm, 0>;
+def : ReadAdvance<ReadShiftImm32, 0>;
+def : ReadAdvance<ReadShiftReg, 0>;
+def : ReadAdvance<ReadShiftReg32, 0>;
+def : ReadAdvance<ReadIDiv, 0>;
+def : ReadAdvance<ReadIDiv32, 0>;
+def : ReadAdvance<ReadIRem, 0>;
+def : ReadAdvance<ReadIRem32, 0>;
+def : ReadAdvance<ReadIMul, 0>;
+def : ReadAdvance<ReadIMul32, 0>;
+def : ReadAdvance<ReadAtomicWA, 0>;
+def : ReadAdvance<ReadAtomicWD, 0>;
+def : ReadAdvance<ReadAtomicDA, 0>;
+def : ReadAdvance<ReadAtomicDD, 0>;
+def : ReadAdvance<ReadAtomicLDW, 0>;
+def : ReadAdvance<ReadAtomicLDD, 0>;
+def : ReadAdvance<ReadAtomicSTW, 0>;
+def : ReadAdvance<ReadAtomicSTD, 0>;
+
+//--- SFPU WriteRes entries ---
+def : WriteRes<WriteSFPUSimple,  [SFPUSimpleUnit]>;
+def : WriteRes<WriteSFPULoad,    [SFPULoadUnit]>;
+def : WriteRes<WriteSFPUStore,   [SFPUStoreUnit]>;
+def : WriteRes<WriteSFPURound,   [SFPURoundUnit]>;
+def : WriteRes<WriteSFPUMAD,     [SFPUMADUnit]>    { let Latency = 2; }
+def : WriteRes<WriteSFPUSwap,    [SFPUSimpleUnit]>  { let Latency = 2; }
+def : WriteRes<WriteSFPULUTFP32, [SFPUMADUnit]>    { let Latency = 2; }
+def : WriteRes<WriteSFPUShft2,   [SFPUSimpleUnit]>;
+def : WriteRes<WriteSFPUNop,     []>;
+
+def : ReadAdvance<ReadSFPUSrc, 0>;
+
+//--- Unsupported extensions (Tensix doesn't have these) ---
+// F, D extensions — no FPU on Baby RISC-V
+defm : UnsupportedSchedF;
+defm : UnsupportedSchedD;
+// V extension — no RVV
+defm : UnsupportedSchedV;
+// Bit manipulation — not present
+defm : UnsupportedSchedZba;
+defm : UnsupportedSchedZbb;
+defm : UnsupportedSchedZbc;
+defm : UnsupportedSchedZbs;
+defm : UnsupportedSchedZbkb;
+defm : UnsupportedSchedZbkx;
+// FP extensions — not present
+defm : UnsupportedSchedZfa;
+defm : UnsupportedSchedZfh;
+// Misc
+defm : UnsupportedSchedSFB;
+defm : UnsupportedSchedXsfvcp;
+defm : UnsupportedSchedZvk;
+defm : UnsupportedSchedZabha;
+
+} // SchedModel = TensixBHScalarModel
+
+//===----------------------------------------------------------------------===//
+// Wormhole Scheduling Model (same scalar pipeline, different SFPU latencies)
+//===----------------------------------------------------------------------===//
+
+def TensixWHScalarModel : SchedMachineModel {
+  let IssueWidth = 1;
+  let MicroOpBufferSize = 0;
+  let LoadLatency = 2;
+  let MispredictPenalty = 5;
+  let CompleteModel = false;
+  let PostRAScheduler = 1;
+  let UnsupportedFeatures = [HasStdExtZbkb, HasStdExtZbkc, HasStdExtZbkx,
+                             HasStdExtZcmt, HasStdExtZknd, HasStdExtZkne,
+                             HasStdExtZknh, HasStdExtZksed, HasStdExtZksh,
+                             HasStdExtZkr, HasVInstructions, HasVInstructionsI64];
+}
+
+let SchedModel = TensixWHScalarModel in {
+
+// Scalar pipeline identical to BH
+def : WriteRes<WriteJmp,  [TensixUnitBranch]>;
+def : WriteRes<WriteJal,  [TensixUnitBranch]>;
+def : WriteRes<WriteJalr, [TensixUnitBranch]>;
+def : WriteRes<WriteIALU,       [TensixUnitALU]>;
+def : WriteRes<WriteIALU32,     [TensixUnitALU]>;
+def : WriteRes<WriteShiftImm,   [TensixUnitALU]>;
+def : WriteRes<WriteShiftImm32, [TensixUnitALU]>;
+def : WriteRes<WriteShiftReg,   [TensixUnitALU]>;
+def : WriteRes<WriteShiftReg32, [TensixUnitALU]>;
+def : WriteRes<WriteIMul,   [TensixUnitIMul]> { let Latency = 2; let ReleaseAtCycles = [2]; }
+def : WriteRes<WriteIMul32, [TensixUnitIMul]> { let Latency = 2; let ReleaseAtCycles = [2]; }
+def : WriteRes<WriteIDiv,   [TensixUnitIDiv]> { let Latency = 33; let ReleaseAtCycles = [33]; }
+def : WriteRes<WriteIDiv32, [TensixUnitIDiv]> { let Latency = 33; let ReleaseAtCycles = [33]; }
+def : WriteRes<WriteIRem,   [TensixUnitIDiv]> { let Latency = 33; let ReleaseAtCycles = [33]; }
+def : WriteRes<WriteIRem32, [TensixUnitIDiv]> { let Latency = 33; let ReleaseAtCycles = [33]; }
+def : WriteRes<WriteLDB, [TensixUnitMem]> { let Latency = 2; }
+def : WriteRes<WriteLDH, [TensixUnitMem]> { let Latency = 2; }
+def : WriteRes<WriteLDW, [TensixUnitMem]> { let Latency = 2; }
+def : WriteRes<WriteSTB, [TensixUnitMem]>;
+def : WriteRes<WriteSTH, [TensixUnitMem]>;
+def : WriteRes<WriteSTW, [TensixUnitMem]>;
+def : WriteRes<WriteAtomicW,   [TensixUnitMem]> { let Latency = 12; let ReleaseAtCycles = [12]; }
+def : WriteRes<WriteAtomicD,   [TensixUnitMem]> { let Latency = 12; let ReleaseAtCycles = [12]; }
+def : WriteRes<WriteAtomicLDW, [TensixUnitMem]> { let Latency = 12; let ReleaseAtCycles = [12]; }
+def : WriteRes<WriteAtomicLDD, [TensixUnitMem]> { let Latency = 12; let ReleaseAtCycles = [12]; }
+def : WriteRes<WriteAtomicSTW, [TensixUnitMem]>;
+def : WriteRes<WriteAtomicSTD, [TensixUnitMem]>;
+def : WriteRes<WriteLDD, [TensixUnitMem]> { let Latency = 2; }
+def : WriteRes<WriteSTD, [TensixUnitMem]>;
+def : WriteRes<WriteCSR, []>;
+def : WriteRes<WriteNop, []>;
+def : InstRW<[WriteIALU], (instrs COPY)>;
+
+def : ReadAdvance<ReadJmp, 0>;
+def : ReadAdvance<ReadJalr, 0>;
+def : ReadAdvance<ReadCSR, 0>;
+def : ReadAdvance<ReadStoreData, 0>;
+def : ReadAdvance<ReadMemBase, 0>;
+def : ReadAdvance<ReadIALU, 0>;
+def : ReadAdvance<ReadIALU32, 0>;
+def : ReadAdvance<ReadShiftImm, 0>;
+def : ReadAdvance<ReadShiftImm32, 0>;
+def : ReadAdvance<ReadShiftReg, 0>;
+def : ReadAdvance<ReadShiftReg32, 0>;
+def : ReadAdvance<ReadIDiv, 0>;
+def : ReadAdvance<ReadIDiv32, 0>;
+def : ReadAdvance<ReadIRem, 0>;
+def : ReadAdvance<ReadIRem32, 0>;
+def : ReadAdvance<ReadIMul, 0>;
+def : ReadAdvance<ReadIMul32, 0>;
+def : ReadAdvance<ReadAtomicWA, 0>;
+def : ReadAdvance<ReadAtomicWD, 0>;
+def : ReadAdvance<ReadAtomicDA, 0>;
+def : ReadAdvance<ReadAtomicDD, 0>;
+def : ReadAdvance<ReadAtomicLDW, 0>;
+def : ReadAdvance<ReadAtomicLDD, 0>;
+def : ReadAdvance<ReadAtomicSTW, 0>;
+def : ReadAdvance<ReadAtomicSTD, 0>;
+
+// SFPU (WH has same latencies as BH for most instructions)
+def : WriteRes<WriteSFPUSimple,  [SFPUSimpleUnit]>;
+def : WriteRes<WriteSFPULoad,    [SFPULoadUnit]>;
+def : WriteRes<WriteSFPUStore,   [SFPUStoreUnit]>;
+def : WriteRes<WriteSFPURound,   [SFPURoundUnit]>;
+def : WriteRes<WriteSFPUMAD,     [SFPUMADUnit]>    { let Latency = 2; }
+def : WriteRes<WriteSFPUSwap,    [SFPUSimpleUnit]>  { let Latency = 2; }
+def : WriteRes<WriteSFPULUTFP32, [SFPUMADUnit]>    { let Latency = 2; }
+def : WriteRes<WriteSFPUShft2,   [SFPUSimpleUnit]>  { let Latency = 2; } // WH: 2 cycles for shuffle
+def : WriteRes<WriteSFPUNop,     []>;
+def : ReadAdvance<ReadSFPUSrc, 0>;
+
+defm : UnsupportedSchedF;
+defm : UnsupportedSchedD;
+defm : UnsupportedSchedV;
+defm : UnsupportedSchedZba;
+defm : UnsupportedSchedZbb;
+defm : UnsupportedSchedZbc;
+defm : UnsupportedSchedZbs;
+defm : UnsupportedSchedZbkb;
+defm : UnsupportedSchedZbkx;
+defm : UnsupportedSchedZfa;
+defm : UnsupportedSchedZfh;
+defm : UnsupportedSchedSFB;
+defm : UnsupportedSchedXsfvcp;
+defm : UnsupportedSchedZvk;
+defm : UnsupportedSchedZabha;
+
+} // SchedModel = TensixWHScalarModel

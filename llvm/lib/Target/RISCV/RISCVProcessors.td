@@ -424,16 +424,13 @@ def SPACEMIT_X60 : RISCVProcessorModel<"spacemit-x60",
 // Tenstorrent Tensix SFPU processors
 //===----------------------------------------------------------------------===//
 
-// Note: Using NoSchedModel because TensixBH/WHModel define only SFPU
-// scheduling resources. LLVM's processor model validation requires WriteRes
-// for all SchedWrite classes (WriteIALU, etc.) in every bound model. Since
-// Tensix cores only execute SFPU code (the scalar RV32 core is separate),
-// we use NoSchedModel here and let the SFPU-specific scheduling passes
-// handle instruction ordering. The TensixBH/WHModel definitions in
-// RISCVSchedXttSFPU.td remain available for future use when we add
-// WriteRes<WriteIALU, ...> etc. for the scalar core.
+// TensixBH/WHScalarModel cover both the Baby RISC-V scalar pipeline
+// (ALU, MUL, DIV, Load/Store, Branch) and the SFPU vector unit.
+// The scalar model enables LLVM's machine scheduler for dispatch code
+// optimization. SFPU instruction ordering is further refined by custom
+// SFPU passes (errata, replay, combine, etc.) that run post-scheduler.
 def TENSIX_BH : RISCVProcessorModel<"tensix-bh",
-                                     NoSchedModel,
+                                     TensixBHScalarModel,
                                      [Feature32Bit,
                                       FeatureStdExtI,
                                       FeatureStdExtM,
@@ -442,7 +439,7 @@ def TENSIX_BH : RISCVProcessorModel<"tensix-bh",
                                       FeatureVendorXttSFPUBH]>;
 
 def TENSIX_WH : RISCVProcessorModel<"tensix-wh",
-                                     NoSchedModel,
+                                     TensixWHScalarModel,
                                      [Feature32Bit,
                                       FeatureStdExtI,
                                       FeatureStdExtM,
