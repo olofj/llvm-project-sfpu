@@ -42,7 +42,7 @@ def int_riscv_tt_sfplut
 def int_riscv_tt_sfploadmacro
     : Intrinsic<[],
                 [llvm_i32_ty, llvm_i32_ty, llvm_i32_ty, llvm_i32_ty],
-                [IntrHasSideEffects, ImmArg<ArgIndex<1>>]>;
+                [IntrReadMem, IntrHasSideEffects, ImmArg<ArgIndex<1>>]>;
 
 //--- Immediate-16 Arithmetic --- (no ImmArg — imm16 and mod1 can be runtime)
 
