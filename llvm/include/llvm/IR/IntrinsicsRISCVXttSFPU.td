@@ -81,6 +81,11 @@ def int_riscv_tt_sfpshft
 def int_riscv_tt_sfpsetcc
     : Intrinsic<[], [llvm_i32_ty, llvm_i32_ty, llvm_i32_ty],
                 [IntrNoMem, IntrHasSideEffects]>;
+// sfpxfcmps: extended float scalar compare. Like sfpsetcc but handles
+// wide immediates (>12 bits) by loading into a register first.
+def int_riscv_tt_sfpxfcmps
+    : Intrinsic<[], [llvm_i32_ty, llvm_i32_ty, llvm_i32_ty],
+                [IntrNoMem, IntrHasSideEffects]>;
 def int_riscv_tt_sfpmov
     : Intrinsic<[llvm_i32_ty], [llvm_i32_ty, llvm_i32_ty, llvm_i32_ty],
                 [IntrNoMem, IntrHasSideEffects]>;

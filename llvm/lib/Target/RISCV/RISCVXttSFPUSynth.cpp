@@ -152,8 +152,8 @@ bool RISCVXttSFPUSynth::expandImmediate(MachineInstr &MI, unsigned ImmOpIdx,
     // Load immediate into a scratch register (L7 by convention)
     BuildMI(MBB, MI, DL, TII->get(RISCV::SFPLOADI))
         .addReg(RISCV::L7, RegState::Define)
-        .addImm(ImmVal)
-        .addImm(0);  // mod1 = FLOATB
+        .addImm(0)        // mod0 = FLOATB
+        .addImm(ImmVal);  // imm16
 
     LLVM_DEBUG(dbgs() << "  Synthesized imm " << ImmVal
                       << " via SFPLOADI for: " << MI);
@@ -178,14 +178,14 @@ bool RISCVXttSFPUSynth::expandImmediate(MachineInstr &MI, unsigned ImmOpIdx,
 
     BuildMI(MBB, MI, DL, TII->get(RISCV::SFPLOADI))
         .addReg(RISCV::L7, RegState::Define)
-        .addImm(Upper)
-        .addImm(8);  // mod0 = UPPER
+        .addImm(8)       // mod0 = UPPER
+        .addImm(Upper);  // imm16
 
     if (Lower != 0) {
       BuildMI(MBB, MI, DL, TII->get(RISCV::SFPLOADI))
           .addReg(RISCV::L7, RegState::Define)
-          .addImm(Lower)
-          .addImm(10);  // mod0 = LOWER
+          .addImm(10)      // mod0 = LOWER
+          .addImm(Lower);  // imm16
     }
 
     LLVM_DEBUG(dbgs() << "  Synthesized wide imm " << ImmVal
@@ -216,61 +216,26 @@ unsigned RISCVXttSFPUSynth::getRegFormVariant(unsigned Opcode) const {
 
 bool RISCVXttSFPUSynth::substituteRegForm(MachineInstr &MI,
                                             Register ScratchReg) {
-  // Special case: SFPSETCC — replace immediate with the loaded register
-  // as the source, zeroing the immediate. The comparison becomes:
-  //   sfpsetcc 0, L7, lreg_dest, mod1  (compare lreg_c=L7 against imm=0)
-  // This works because sfpsetcc compares src against imm, and we've
-  // loaded the constant into L7.
+  // Special case: SFPSETCC with wide immediate.
+  // Load constant into L7, then emit sfpsetcc with imm=0.
+  // With imm=0, the SFPU hardware uses the previously-loaded register
+  // value for comparison (this is how sfpxfcmpv vector compare works).
   if (MI.getOpcode() == RISCV::SFPSETCC) {
     MachineBasicBlock &MBB = *MI.getParent();
     DebugLoc DL = MI.getDebugLoc();
-    // SFPSETCC format: (imm12, lreg_c, lreg_dest, mod1, chain)
-    // Replace: imm12 with 0, lreg_c with ScratchReg
+    // SFPSETCC format: (imm12, lreg_c, lreg_dest, mod1)
     Register SrcReg = MI.getOperand(1).getReg();
     unsigned LregDest = MI.getOperand(2).getImm();
     unsigned Mod1 = MI.getOperand(3).getImm();
-
-    // Load the original src into another temp if needed, then compare
-    // scratch (constant) against src. But sfpsetcc compares lreg_c against
-    // imm12, not the other way around. We need to swap: use SFPIADD to
-    // subtract and check sign, or use a different approach.
-    //
-    // Actually, sfpsetcc sets CC based on (lreg_c <op> imm12) where <op>
-    // depends on mod1. If we want (src <op> constant), we can do:
-    // sfpsetcc 0, src, dest, mod1  — but this compares src against 0, not
-    // the constant. The constant was supposed to be in imm12.
-    //
-    // Alternative: load constant into L7, then use sfpiadd to compute
-    // (src - L7) and compare that against 0. But this changes semantics.
-    //
-    // Simpler: just use sfpsetcc with the loaded value as lreg_c and set
-    // imm12=0 with the right mod1 adjustment. The comparison modes for
-    // float compare are: LT, GE etc. Comparing L7 (=constant) against
-    // 0 with src in lreg_c doesn't make sense.
-    //
-    // The real answer: for float comparisons with large constants, the
-    // constant should be loaded into a register and the comparison should
-    // use a register-register form. But SFPSETCC only has reg-imm form.
-    //
-    // Best approach: swap the operands — put the loaded constant as lreg_c
-    // and the original source as the immediate (0), then flip the comparison
-    // direction in mod1. OR: just use sfpxfcmpv (vector-vector compare)
-    // pattern from the sfpi_builtins.h which maps to sfpsetcc(a, 0, mod).
-    //
-    // For now: swap src ↔ constant. sfpsetcc(0, L7, dest, mod1) compares
-    // L7 against 0 — not what we want. We need (original_src <op> constant).
-    //
-    // Actually the sfpi compat header defines:
-    //   sfpxfcmps(v, f, mod) → sfpsetcc(v, f, mod), 0
-    // So sfpsetcc args are: (imm=f, src=v, dest=0, mod1=mod)
-    // The hardware does: compare src(=v) against imm(=f) with mode mod1.
-    //
-    // To use register form: sfpsetcc(imm=0, src=v, dest=0, mod1=mod)
-    // But this compares v against 0, not against the constant.
-    //
-    // The only way: load constant into a register, then subtract and compare
-    // against 0. This requires SFPIADD or similar. Too complex for now.
-    // Fall through to the error.
+    // L7 was loaded by expandImmediate before calling substituteRegForm.
+    // Emit sfpsetcc with imm=0 to use the loaded value.
+    BuildMI(MBB, MI, DL, TII->get(RISCV::SFPSETCC))
+        .addImm(0)            // imm12 = 0 (use previously loaded value)
+        .addReg(SrcReg)       // lreg_c = original source vector
+        .addImm(LregDest)     // lreg_dest = same CC mode
+        .addImm(Mod1);        // mod1 = same comparison type
+    MI.eraseFromParent();
+    return true;
   }
 
   unsigned RegOpc = getRegFormVariant(MI.getOpcode());
@@ -317,15 +282,18 @@ bool RISCVXttSFPUSynth::runOnMachineFunction(MachineFunction &MF) {
   bool Changed = false;
 
   for (MachineBasicBlock &MBB : MF) {
-    for (auto MBBI = MBB.begin(), MBBE = MBB.end(); MBBI != MBBE; ++MBBI) {
-      unsigned FieldWidth = getImmFieldWidth(MBBI->getOpcode());
+    for (auto MBBI = MBB.begin(), MBBE = MBB.end(); MBBI != MBBE; ) {
+      MachineInstr &MI = *MBBI;
+      ++MBBI;  // Advance BEFORE potential modification/erasure
+
+      unsigned FieldWidth = getImmFieldWidth(MI.getOpcode());
       if (FieldWidth == 0)
         continue;
 
       // Find the immediate operand (varies by format)
-      for (unsigned I = 0, E = MBBI->getNumOperands(); I < E; ++I) {
-        if (MBBI->getOperand(I).isImm()) {
-          Changed |= expandImmediate(*MBBI, I, FieldWidth);
+      for (unsigned I = 0, E = MI.getNumOperands(); I < E; ++I) {
+        if (MI.getOperand(I).isImm()) {
+          Changed |= expandImmediate(MI, I, FieldWidth);
           break;  // Only one immediate per instruction
         }
       }

@@ -2718,6 +2718,21 @@ void RISCVDAGToDAGISel::Select(SDNode *Node) {
       ReplaceNode(Node, MI);
       return;
     }
+    case Intrinsic::riscv_tt_sfpxfcmps: {
+      // Extended float scalar compare — lower to SFPSETCC, let the synth
+      // pass handle wide immediates post-regalloc.
+      SDValue Chain = Node->getOperand(0);
+      SDValue Src = Node->getOperand(2);
+      if (isa<ConstantSDNode>(Src))
+        Src = CurDAG->getRegister(RISCV::L9, MVT::i32);
+      SDValue Imm = SFPU_IMM(Node->getOperand(3));
+      SDValue Mod1 = SFPU_IMM(Node->getOperand(4));
+      MachineSDNode *MI = CurDAG->getMachineNode(
+          RISCV::SFPSETCC, DL, MVT::Other,
+          {Imm, Src, CurDAG->getTargetConstant(0, DL, MVT::i32), Mod1, Chain});
+      ReplaceNode(Node, MI);
+      return;
+    }
     case Intrinsic::riscv_tt_sfpencc: {
       SDValue Chain = Node->getOperand(0);
       SDValue Imm = SFPU_IMM(Node->getOperand(2));

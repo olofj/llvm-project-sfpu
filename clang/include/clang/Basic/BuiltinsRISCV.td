@@ -184,6 +184,7 @@ def tt_sfpexman_lv  : RISCVBuiltin<"unsigned int(unsigned int, unsigned int, uns
 def tt_sfpiadd      : RISCVBuiltin<"unsigned int(unsigned int, unsigned int, unsigned int)">;
 def tt_sfpshft      : RISCVBuiltin<"unsigned int(unsigned int, unsigned int, unsigned int)">;
 def tt_sfpsetcc     : RISCVBuiltin<"void(unsigned int, unsigned int, unsigned int)">;
+def tt_sfpxfcmps    : RISCVBuiltin<"void(unsigned int, unsigned int, unsigned int)">;
 def tt_sfpmov       : RISCVBuiltin<"unsigned int(unsigned int, unsigned int, unsigned int)">;
 def tt_sfpmov_lv    : RISCVBuiltin<"unsigned int(unsigned int, unsigned int, unsigned int, unsigned int)">;
 def tt_sfpabs       : RISCVBuiltin<"unsigned int(unsigned int, unsigned int, unsigned int)">;
