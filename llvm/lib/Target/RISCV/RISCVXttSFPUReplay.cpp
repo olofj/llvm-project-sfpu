@@ -285,7 +285,9 @@ bool RISCVXttSFPUReplay::runOnMachineFunction(MachineFunction &MF) {
 
       // Mark original sequence: insert REPLAY(slot, len, 0, 1) before it
       // load_mode=1 means "record the following instructions into the buffer"
-      if (Cand->StartIdx < SFPUInstrs.size()) {
+      if (Cand->StartIdx < SFPUInstrs.size() &&
+          SFPUInstrs[Cand->StartIdx] &&
+          SFPUInstrs[Cand->StartIdx]->getParent() == &MBB) {
         MachineInstr *FirstInOriginal = SFPUInstrs[Cand->StartIdx];
         DebugLoc DL = FirstInOriginal->getDebugLoc();
 
@@ -304,6 +306,10 @@ bool RISCVXttSFPUReplay::runOnMachineFunction(MachineFunction &MF) {
           continue;
 
         MachineInstr *FirstInClone = SFPUInstrs[CloneStart];
+        // Skip if this instruction was already erased by a previous candidate.
+        if (!FirstInClone || FirstInClone->getParent() != &MBB)
+          continue;
+
         DebugLoc DL = FirstInClone->getDebugLoc();
 
         // Insert REPLAY in "execute" mode before the clone, then delete it.
@@ -313,10 +319,13 @@ bool RISCVXttSFPUReplay::runOnMachineFunction(MachineFunction &MF) {
             .addImm(1)               // exec_while_load = 1 (execute)
             .addImm(0);              // load_mode = 0 (not recording)
 
-        // Delete the clone instructions
+        // Delete the clone instructions and null out their SFPUInstrs entries
         for (unsigned J = 0; J < Cand->Length && CloneStart + J < SFPUInstrs.size(); ++J) {
           MachineInstr *CloneInstr = SFPUInstrs[CloneStart + J];
-          CloneInstr->eraseFromParent();
+          if (CloneInstr && CloneInstr->getParent() == &MBB) {
+            CloneInstr->eraseFromParent();
+            SFPUInstrs[CloneStart + J] = nullptr;
+          }
         }
 
         Changed = true;

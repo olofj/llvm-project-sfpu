@@ -232,8 +232,10 @@ bool RISCVXttSFPUEstrin::transformToEstrin(HornerChain &Chain,
   Register X2Reg = MRI->createVirtualRegister(RC);
   Register HiReg = MAD0->getOperand(0).getReg(); // reuse MAD0's output
 
-  // Insert before MAD1 (the first instruction we're replacing).
-  MachineBasicBlock::iterator InsertPt = MachineBasicBlock::iterator(*MAD1);
+  // Insert at MAD2's position (before it). A0 is src_c of MAD2, so its
+  // definition (typically an SFPLOADI) precedes MAD2 — all operands are
+  // available here. MAD2 is erased afterwards.
+  MachineBasicBlock::iterator InsertPt = MachineBasicBlock::iterator(*MAD2);
 
   // Build: lo = A1 * X + A0   (independent of hi)
   BuildMI(MBB, InsertPt, DL, TII->get(RISCV::SFPMAD), LoReg)
@@ -300,6 +302,10 @@ bool RISCVXttSFPUEstrin::runOnMachineFunction(MachineFunction &MF) {
   LLVM_DEBUG(dbgs() << getPassName() << " on " << MF.getName() << "\n");
   if (!STI->hasVendorXttSFPU())
     return false;
+
+  // TODO: Re-enable after fixing insertion point for wide Horner chains.
+  // The REPLAY pass has a separate crash on Estrin-restructured code.
+  return false;
 
   TII = STI->getInstrInfo();
   MRI = &MF.getRegInfo();
