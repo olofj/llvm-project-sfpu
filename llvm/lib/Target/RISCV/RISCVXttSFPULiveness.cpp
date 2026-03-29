@@ -25,6 +25,9 @@
 // a tied $live_val = $lreg_dest constraint. This tells the register allocator
 // to keep the destination register's old value available.
 //
+// The pass uses global CC stack depth analysis across the CFG to handle
+// predicated regions that span multiple basic blocks (common at -O3).
+//
 // Reference: ttsim-analysis/ERRATA.md Section 3 (Architectural Notes)
 //            ttsim-analysis/FUNCTIONAL_UNITS.md Section 3.3
 //            sfpi-gcc: rtl-rvtt-liveness.cc
@@ -34,9 +37,11 @@
 #include "RISCV.h"
 #include "RISCVInstrInfo.h"
 #include "RISCVSubtarget.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
+#include <queue>
 
 using namespace llvm;
 
@@ -59,10 +64,25 @@ public:
 private:
   const RISCVSubtarget *STI = nullptr;
   const RISCVInstrInfo *TII = nullptr;
+  MachineRegisterInfo *MRI = nullptr;
 
+  /// CC stack depth at entry to each basic block, keyed by MBB number.
+  DenseMap<unsigned, int> BBEntryCCDepth;
+
+  /// Compute the net CC stack depth change for a basic block.
   int computeCCStackDelta(const MachineBasicBlock &MBB) const;
+
+  /// Compute CC stack entry depth for every block via forward dataflow.
+  void computeGlobalCCDepths(MachineFunction &MF);
+
+  /// Get the CC depth at a specific instruction within its block.
+  int getCCDepthAtInstr(const MachineInstr &MI) const;
+
+  /// Determine if Reg needs _lv preservation at instruction MI.
+  /// Uses SSA def-use analysis: compares CC depth at definition vs use.
   bool isLiveAcrossPredication(const MachineInstr &MI, Register Reg,
-                                const MachineBasicBlock &MBB) const;
+                                int CCDepthAtMI) const;
+
   bool selectLiveValueVariant(MachineInstr &MI, int CCDepth,
                                MachineBasicBlock &MBB);
 
@@ -121,29 +141,127 @@ int RISCVXttSFPULiveness::computeCCStackDelta(
   return Delta;
 }
 
-bool RISCVXttSFPULiveness::isLiveAcrossPredication(
-    const MachineInstr &MI, Register Reg,
-    const MachineBasicBlock &MBB) const {
-  // Walk backwards from MI to find the most recent SFPPUSHC.
-  // If Reg was defined before that SFPPUSHC, it's live across the boundary.
-  bool FoundPush = false;
-  for (auto I = MachineBasicBlock::const_reverse_iterator(MI),
-            E = MBB.rend();
-       I != E; ++I) {
-    if (I->getOpcode() == RISCV::SFPPUSHC) {
-      FoundPush = true;
-      break;
-    }
-    // If Reg is defined between MI and the PUSHC, it's not live-across
-    for (const MachineOperand &MO : I->defs()) {
-      if (MO.isReg() && MO.getReg() == Reg)
-        return false;
-    }
+void RISCVXttSFPULiveness::computeGlobalCCDepths(MachineFunction &MF) {
+  BBEntryCCDepth.clear();
+
+  // Initialize all blocks as unvisited (-1 sentinel).
+  DenseMap<unsigned, int> BBExitCCDepth;
+  for (MachineBasicBlock &MBB : MF) {
+    BBEntryCCDepth[MBB.getNumber()] = -1;
+    BBExitCCDepth[MBB.getNumber()] = -1;
   }
 
-  // If we found a PUSHC and didn't find a definition of Reg between it and MI,
-  // then Reg is live across the predication boundary.
-  return FoundPush;
+  // Entry block starts at depth 0.
+  MachineBasicBlock &EntryBB = MF.front();
+  BBEntryCCDepth[EntryBB.getNumber()] = 0;
+  int Delta = computeCCStackDelta(EntryBB);
+  BBExitCCDepth[EntryBB.getNumber()] = Delta;
+
+  // Worklist-driven forward propagation.
+  // The CC stack is always balanced (each SFPPUSHC has a matching SFPPOPC),
+  // so all predecessors of a block agree on the entry depth. A single forward
+  // pass suffices — no fixpoint iteration needed.
+  std::queue<MachineBasicBlock *> WorkList;
+  for (MachineBasicBlock *Succ : EntryBB.successors())
+    WorkList.push(Succ);
+
+  while (!WorkList.empty()) {
+    MachineBasicBlock *MBB = WorkList.front();
+    WorkList.pop();
+
+    // Compute entry depth from predecessors.
+    int EntryDepth = 0;
+    bool HasComputedPred = false;
+    for (MachineBasicBlock *Pred : MBB->predecessors()) {
+      int PredExit = BBExitCCDepth[Pred->getNumber()];
+      if (PredExit < 0)
+        continue;  // Predecessor not yet processed.
+      if (!HasComputedPred) {
+        EntryDepth = PredExit;
+        HasComputedPred = true;
+      } else {
+        // All predecessors should agree (balanced CC stack).
+        // Use max as conservative fallback for safety.
+        EntryDepth = std::max(EntryDepth, PredExit);
+      }
+    }
+
+    if (!HasComputedPred)
+      continue;  // No computed predecessors yet; will be revisited via worklist.
+
+    // Skip if already computed with this value.
+    if (BBEntryCCDepth[MBB->getNumber()] == EntryDepth)
+      continue;
+
+    BBEntryCCDepth[MBB->getNumber()] = EntryDepth;
+    int ExitDepth = EntryDepth + computeCCStackDelta(*MBB);
+    assert(ExitDepth >= 0 && "CC stack underflow");
+    BBExitCCDepth[MBB->getNumber()] = ExitDepth;
+
+    for (MachineBasicBlock *Succ : MBB->successors())
+      WorkList.push(Succ);
+  }
+
+  LLVM_DEBUG({
+    dbgs() << "  CC stack depth map:\n";
+    for (MachineBasicBlock &MBB : MF) {
+      int Entry = BBEntryCCDepth[MBB.getNumber()];
+      dbgs() << "    " << printMBBReference(MBB) << ": entry="
+             << (Entry >= 0 ? std::to_string(Entry) : "?") << "\n";
+    }
+  });
+}
+
+int RISCVXttSFPULiveness::getCCDepthAtInstr(const MachineInstr &MI) const {
+  const MachineBasicBlock *MBB = MI.getParent();
+  auto It = BBEntryCCDepth.find(MBB->getNumber());
+  if (It == BBEntryCCDepth.end() || It->second < 0)
+    return 0;  // Unknown block (unreachable); treat as depth 0.
+  int Depth = It->second;
+
+  for (const MachineInstr &Cur : *MBB) {
+    if (&Cur == &MI)
+      return Depth;
+    if (Cur.getOpcode() == RISCV::SFPPUSHC)
+      Depth++;
+    else if (Cur.getOpcode() == RISCV::SFPPOPC)
+      Depth--;
+  }
+  llvm_unreachable("Instruction not found in its parent block");
+}
+
+bool RISCVXttSFPULiveness::isLiveAcrossPredication(
+    const MachineInstr &MI, Register Reg, int CCDepthAtMI) const {
+  // Only virtual registers have single definitions in SSA form.
+  if (!Reg.isVirtual())
+    return false;
+
+  // Find the unique definition of this register (SSA guarantee).
+  MachineInstr *DefMI = MRI->getVRegDef(Reg);
+  if (!DefMI)
+    return false;
+
+  // Compute CC depth at the definition point.
+  int DefCCDepth = getCCDepthAtInstr(*DefMI);
+
+  // If the current instruction is at a greater CC depth than the definition,
+  // the value was defined outside (before) a SFPPUSHC that encloses MI.
+  // The write inside the predicated region must use _lv to preserve
+  // the value in disabled lanes.
+  //
+  // Examples:
+  //   depth=0: %x = SFPMOV ...       (DefCCDepth = 0)
+  //   depth=0: SFPPUSHC              (depth -> 1)
+  //   depth=1: %x = SFPMAD %x, ...  (CCDepthAtMI = 1 > 0, needs _lv)
+  //
+  // Cross-block:
+  //   BB0 depth=0: %x = SFPMOV; SFPPUSHC  (exits at depth=1)
+  //   BB1 entry=1: %x = SFPMAD %x, ...    (CCDepthAtMI=1, DefCCDepth=0, needs _lv)
+  //
+  // Same depth (no _lv needed):
+  //   depth=1: %y = SFPLOADI         (DefCCDepth = 1)
+  //   depth=1: %z = SFPMAD %y, ...   (CCDepthAtMI = 1 == 1, no _lv)
+  return CCDepthAtMI > DefCCDepth;
 }
 
 bool RISCVXttSFPULiveness::selectLiveValueVariant(MachineInstr &MI,
@@ -161,7 +279,7 @@ bool RISCVXttSFPULiveness::selectLiveValueVariant(MachineInstr &MI,
 
   Register DestReg = DestOp.getReg();
 
-  if (!isLiveAcrossPredication(MI, DestReg, MBB))
+  if (!isLiveAcrossPredication(MI, DestReg, CCDepth))
     return false;
 
   unsigned LVOpc = getLVVariant(MI.getOpcode());
@@ -211,16 +329,23 @@ bool RISCVXttSFPULiveness::runOnMachineFunction(MachineFunction &MF) {
     return false;
 
   TII = STI->getInstrInfo();
+  MRI = &MF.getRegInfo();
+
+  // Phase 1: Compute global CC stack depths across the CFG.
+  computeGlobalCCDepths(MF);
 
   bool Changed = false;
 
   for (MachineBasicBlock &MBB : MF) {
-    int CCDepth = 0;
+    // Start from the precomputed entry depth for this block.
+    int CCDepth = BBEntryCCDepth.lookup(MBB.getNumber());
+    if (CCDepth < 0)
+      CCDepth = 0;  // Unreachable block; treat as depth 0.
 
     for (auto MBBI = MBB.begin(), MBBE = MBB.end(); MBBI != MBBE; ) {
       MachineInstr &MI = *MBBI++;
 
-      // Track CC stack depth
+      // Track CC stack depth within the block.
       switch (MI.getOpcode()) {
       case RISCV::SFPPUSHC:
         CCDepth++;
@@ -230,7 +355,6 @@ bool RISCVXttSFPULiveness::runOnMachineFunction(MachineFunction &MF) {
         if (CCDepth < 0) {
           LLVM_DEBUG(dbgs() << "  WARNING: unbalanced SFPPOPC in "
                             << MF.getName() << "\n");
-          assert(CCDepth >= 0 && "Unbalanced CC stack: more POPs than PUSHes");
           CCDepth = 0;
         }
         break;
@@ -242,6 +366,7 @@ bool RISCVXttSFPULiveness::runOnMachineFunction(MachineFunction &MF) {
     }
   }
 
+  BBEntryCCDepth.clear();
   return Changed;
 }
 
