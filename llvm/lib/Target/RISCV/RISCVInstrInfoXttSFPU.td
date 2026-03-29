@@ -114,6 +114,7 @@ class RVInstTensix<bits<8> opcode, dag outs, dag ins, string opcodestr,
   let Inst{1-0} = 0b11;     // 32-bit instruction marker
   let DecoderNamespace = "XttSFPU";
   let Size = 4;
+  let IsXttSFPU = 1;        // Triggers ROL2 encoding swizzle in MCCodeEmitter
   let mayLoad = 0;
   let mayStore = 0;
   let hasSideEffects = 1;   // SFPU instructions have coprocessor side effects

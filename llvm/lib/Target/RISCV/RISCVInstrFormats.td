@@ -223,6 +223,10 @@ class RVInstCommon<dag outs, dag ins, string opcodestr, string argstr,
   // 3 -> widening case
   bits<2> TargetOverlapConstraintType = 0;
   let TSFlags{22-21} = TargetOverlapConstraintType;
+
+  // Bit 23: Tensix SFPU coprocessor instruction (needs ROL2 encoding swizzle)
+  bit IsXttSFPU = 0;
+  let TSFlags{23} = IsXttSFPU;
 }
 
 class RVInst<dag outs, dag ins, string opcodestr, string argstr,

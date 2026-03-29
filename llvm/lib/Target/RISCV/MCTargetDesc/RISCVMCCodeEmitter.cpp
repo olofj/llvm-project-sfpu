@@ -347,6 +347,13 @@ void RISCVMCCodeEmitter::encodeInstruction(const MCInst &MI,
   }
   case 4: {
     uint32_t Bits = getBinaryCodeForInstr(MI, Fixups, STI);
+    // Tensix SFPU instructions require a rotate-left-by-2 encoding.
+    // This moves the 32-bit marker (bits[1:0]=0b11) to bits[3:2], which
+    // tells the Tensix instruction decoder to route to the SFPU coprocessor
+    // instead of the RISC-V core.  Without this rotation, the hardware
+    // misinterprets SFPU words as RISC-V instructions, causing hangs.
+    if (Desc.TSFlags & RISCVII::IsXttSFPUMask)
+      Bits = (Bits << 2) | (Bits >> 30);
     support::endian::write(CB, Bits, llvm::endianness::little);
     break;
   }

@@ -123,6 +123,10 @@ enum {
   // 3 -> widening case
   TargetOverlapConstraintTypeShift = UsesVXRMShift + 1,
   TargetOverlapConstraintTypeMask = 3ULL << TargetOverlapConstraintTypeShift,
+
+  // Bit 23: Tensix SFPU coprocessor instruction (needs ROL2 encoding swizzle)
+  IsXttSFPUShift = TargetOverlapConstraintTypeShift + 2,
+  IsXttSFPUMask = 1ULL << IsXttSFPUShift,
 };
 
 // Helper functions to read TSFlags.
