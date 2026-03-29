@@ -125,10 +125,14 @@ bool RISCVXttSFPUPeephole::tryFuseLZSetCC(MachineBasicBlock &MBB) {
     if (SetCCMI.getOpcode() != RISCV::SFPSETCC)
       continue;
 
-    // Check that SFPSETCC uses the same source as SFPLZ
-    // SFPSETCC format: imm12, lreg_c, lreg_dest, mod1
-    // We need to verify lreg_c matches SFPLZ's lreg_c
-    // And the mod1 is NE0 or EQ0
+    // Verify SFPSETCC operates on the value SFPLZ produced.
+    // SFPLZ format:   dest(0), imm12(1), lreg_c(2), mod1(3)
+    // SFPSETCC format: imm12(0), lreg_c(1), lreg_dest(2), mod1(3)
+    Register LzDest = LzMI.getOperand(0).getReg();
+    Register SetCCSrc = SetCCMI.getOperand(1).getReg(); // lreg_c
+    if (LzDest != SetCCSrc)
+      continue; // SETCC reads a different register — don't fuse
+
     unsigned SetCCMod = SetCCMI.getOperand(SetCCMI.getNumOperands() - 1).getImm();
 
     unsigned NewLZMod;
@@ -182,6 +186,12 @@ bool RISCVXttSFPUPeephole::tryFuseExExpSetCC(MachineBasicBlock &MBB) {
     MachineInstr &SetCCMI = *NextMBBI;
     if (SetCCMI.getOpcode() != RISCV::SFPSETCC)
       continue;
+
+    // Verify SFPSETCC operates on the value SFPEXEXP produced.
+    Register ExExpDest = ExExpMI.getOperand(0).getReg();
+    Register SetCCSrc = SetCCMI.getOperand(1).getReg(); // lreg_c
+    if (ExExpDest != SetCCSrc)
+      continue; // SETCC reads a different register — don't fuse
 
     unsigned SetCCMod = SetCCMI.getOperand(SetCCMI.getNumOperands() - 1).getImm();
 

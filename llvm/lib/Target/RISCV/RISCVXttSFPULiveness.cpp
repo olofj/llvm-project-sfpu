@@ -226,8 +226,12 @@ bool RISCVXttSFPULiveness::runOnMachineFunction(MachineFunction &MF) {
         break;
       case RISCV::SFPPOPC:
         CCDepth--;
-        if (CCDepth < 0)
+        if (CCDepth < 0) {
+          LLVM_DEBUG(dbgs() << "  WARNING: unbalanced SFPPOPC in "
+                            << MF.getName() << "\n");
+          assert(CCDepth >= 0 && "Unbalanced CC stack: more POPs than PUSHes");
           CCDepth = 0;
+        }
         break;
       default:
         break;

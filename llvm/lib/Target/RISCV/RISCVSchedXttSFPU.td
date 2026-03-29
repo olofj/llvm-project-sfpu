@@ -233,6 +233,9 @@ def : InstRW<[WriteSFPUNop], (instrs SFPNOP)>;
 // CC-setting BH-only instructions
 def : InstRW<[WriteSFPUSimple], (instrs SFPGT, SFPLE)>;
 
+// BH config move + register copy pseudo
+def : InstRW<[WriteSFPUSimple], (instrs SFPMOV_CONFIG, SFPMOV_CONFIG_LV, SFPMOV_REG)>;
+
 // REPLAY (Tensix scalar instruction, not SFPU — 1 cycle)
 def : InstRW<[WriteIALU], (instrs TTREPLAY)>;
 
@@ -367,7 +370,7 @@ def : InstRW<[WriteSFPUMAD], (instrs
 )>;
 
 def : InstRW<[WriteSFPULoad], (instrs
-    SFPLOAD_WH, SFPLOADI, SFPLUT, SFPLOADMACRO_BH,
+    SFPLOAD_WH, SFPLOADI, SFPLUT, SFPLOADMACRO_BH, SFPLOADMACRO_WH,
     SFPLOAD_WH_LV
 )>;
 
@@ -378,6 +381,9 @@ def : InstRW<[WriteSFPULUTFP32], (instrs SFPLUTFP32)>;
 def : InstRW<[WriteSFPUShft2], (instrs SFPSHFT2)>;  // WH: 2 cycles (model above)
 def : InstRW<[WriteSFPUNop], (instrs SFPNOP)>;
 def : InstRW<[WriteIALU], (instrs TTREPLAY)>;
+
+// Register copy pseudo
+def : InstRW<[WriteSFPUSimple], (instrs SFPMOV_REG)>;
 
 //--- Unsupported extensions ---
 defm : UnsupportedSchedF;
