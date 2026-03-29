@@ -374,6 +374,7 @@ bool RISCVXttSFPUErrata::runOnMachineFunction(MachineFunction &MF) {
   STI = &MF.getSubtarget<RISCVSubtarget>();
 
   // Only run if SFPU extension is enabled
+  LLVM_DEBUG(dbgs() << getPassName() << " on " << MF.getName() << "\n");
   if (!STI->hasVendorXttSFPU())
     return false;
 

@@ -235,6 +235,7 @@ void RISCVXttSFPUReplay::allocateBuffer(
 bool RISCVXttSFPUReplay::runOnMachineFunction(MachineFunction &MF) {
   STI = &MF.getSubtarget<RISCVSubtarget>();
 
+  LLVM_DEBUG(dbgs() << getPassName() << " on " << MF.getName() << "\n");
   if (!STI->hasVendorXttSFPU())
     return false;
 

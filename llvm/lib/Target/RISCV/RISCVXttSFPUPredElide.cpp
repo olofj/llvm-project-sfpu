@@ -146,6 +146,7 @@ bool RISCVXttSFPUPredElide::tryElideRegion(
 bool RISCVXttSFPUPredElide::runOnMachineFunction(MachineFunction &MF) {
   STI = &MF.getSubtarget<RISCVSubtarget>();
 
+  LLVM_DEBUG(dbgs() << getPassName() << " on " << MF.getName() << "\n");
   if (!STI->hasVendorXttSFPU())
     return false;
 
@@ -161,24 +162,29 @@ bool RISCVXttSFPUPredElide::runOnMachineFunction(MachineFunction &MF) {
         continue;
       }
 
-      auto PushI = MBBI++;
-      if (MBBI == MBBE || MBBI->getOpcode() != RISCV::SFPSETCC) {
+      // Peek ahead for PUSHC → SETCC → BODY → POPC pattern
+      // without advancing MBBI until we know the pattern matches.
+      auto PushI = MBBI;
+      auto SetCCI = std::next(PushI);
+      if (SetCCI == MBBE || SetCCI->getOpcode() != RISCV::SFPSETCC) {
+        ++MBBI;
         continue;
       }
 
-      auto SetCCI = MBBI++;
-      if (MBBI == MBBE) continue;
+      auto BodyI = std::next(SetCCI);
+      if (BodyI == MBBE) { ++MBBI; continue; }
 
-      auto BodyI = MBBI++;
-      if (MBBI == MBBE || MBBI->getOpcode() != RISCV::SFPPOPC) {
+      auto PopI = std::next(BodyI);
+      if (PopI == MBBE || PopI->getOpcode() != RISCV::SFPPOPC) {
+        ++MBBI;
         continue;
       }
 
-      auto PopI = MBBI++;
+      // Pattern matched — advance past it before potentially erasing
+      MBBI = std::next(PopI);
 
       if (tryElideRegion(MBB, PushI, SetCCI, BodyI, PopI)) {
         Changed = true;
-        // Iterator was already advanced past POP
       }
     }
   }

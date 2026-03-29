@@ -104,9 +104,8 @@ bool RISCVXttSFPUEstrin::findHornerChain(MachineInstr &StartMI,
     Register SrcB = Current->getOperand(2).getReg();
 
     if (Chain.MADs.size() == 1) {
-      // First MAD: can't determine X yet (both src_a and src_b could be X).
-      // Defer X identification until we see the second MAD, where the chain
-      // dependency reveals which operand is the accumulated result and which is X.
+      // First MAD: defer X identification to second MAD (need chain dep to
+      // distinguish X from coefficient when both are virtual registers).
     } else if (Chain.MADs.size() == 2) {
       // Second MAD reveals X: one of src_a/src_b is the previous result (chain),
       // the other is X. X is the one that also appeared in the first MAD.
@@ -298,6 +297,7 @@ bool RISCVXttSFPUEstrin::transformToEstrin(HornerChain &Chain,
 bool RISCVXttSFPUEstrin::runOnMachineFunction(MachineFunction &MF) {
   STI = &MF.getSubtarget<RISCVSubtarget>();
 
+  LLVM_DEBUG(dbgs() << getPassName() << " on " << MF.getName() << "\n");
   if (!STI->hasVendorXttSFPU())
     return false;
 
