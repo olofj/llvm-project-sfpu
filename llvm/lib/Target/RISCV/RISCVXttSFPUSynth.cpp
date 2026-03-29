@@ -170,25 +170,26 @@ bool RISCVXttSFPUSynth::expandImmediate(MachineInstr &MI, unsigned ImmOpIdx,
     }
     return false;
   } else {
-    // Value > 16 bits: SFPLOADI (upper 16) + SFPIADD (lower 12)
-    unsigned Upper = (ImmVal >> 12) & 0xFFFF;
-    unsigned Lower = ImmVal & 0xFFF;
+    // Value > 16 bits: SFPLOADI UPPER (bits [31:16]) + SFPLOADI LOWER (bits [15:0])
+    // UPPER mode (mod0=8): loads imm16 into bits [31:16], zeros [15:0]
+    // LOWER mode (mod0=10): OR's imm16 into bits [15:0], preserving [31:16]
+    unsigned Upper = (ImmVal >> 16) & 0xFFFF;
+    unsigned Lower = ImmVal & 0xFFFF;
 
     BuildMI(MBB, MI, DL, TII->get(RISCV::SFPLOADI))
         .addReg(RISCV::L7, RegState::Define)
         .addImm(Upper)
-        .addImm(8);  // mod1 = UPPER
+        .addImm(8);  // mod0 = UPPER
 
     if (Lower != 0) {
-      BuildMI(MBB, MI, DL, TII->get(RISCV::SFPIADD))
+      BuildMI(MBB, MI, DL, TII->get(RISCV::SFPLOADI))
           .addReg(RISCV::L7, RegState::Define)
           .addImm(Lower)
-          .addReg(RISCV::L7)
-          .addImm(0);
+          .addImm(10);  // mod0 = LOWER
     }
 
     LLVM_DEBUG(dbgs() << "  Synthesized wide imm " << ImmVal
-                      << " via SFPLOADI+SFPIADD for: " << MI);
+                      << " via SFPLOADI UPPER+LOWER for: " << MI);
     // Replace instruction with register-form variant using L7
     if (substituteRegForm(MI, RISCV::L7))
       return true;
@@ -215,6 +216,63 @@ unsigned RISCVXttSFPUSynth::getRegFormVariant(unsigned Opcode) const {
 
 bool RISCVXttSFPUSynth::substituteRegForm(MachineInstr &MI,
                                             Register ScratchReg) {
+  // Special case: SFPSETCC — replace immediate with the loaded register
+  // as the source, zeroing the immediate. The comparison becomes:
+  //   sfpsetcc 0, L7, lreg_dest, mod1  (compare lreg_c=L7 against imm=0)
+  // This works because sfpsetcc compares src against imm, and we've
+  // loaded the constant into L7.
+  if (MI.getOpcode() == RISCV::SFPSETCC) {
+    MachineBasicBlock &MBB = *MI.getParent();
+    DebugLoc DL = MI.getDebugLoc();
+    // SFPSETCC format: (imm12, lreg_c, lreg_dest, mod1, chain)
+    // Replace: imm12 with 0, lreg_c with ScratchReg
+    Register SrcReg = MI.getOperand(1).getReg();
+    unsigned LregDest = MI.getOperand(2).getImm();
+    unsigned Mod1 = MI.getOperand(3).getImm();
+
+    // Load the original src into another temp if needed, then compare
+    // scratch (constant) against src. But sfpsetcc compares lreg_c against
+    // imm12, not the other way around. We need to swap: use SFPIADD to
+    // subtract and check sign, or use a different approach.
+    //
+    // Actually, sfpsetcc sets CC based on (lreg_c <op> imm12) where <op>
+    // depends on mod1. If we want (src <op> constant), we can do:
+    // sfpsetcc 0, src, dest, mod1  — but this compares src against 0, not
+    // the constant. The constant was supposed to be in imm12.
+    //
+    // Alternative: load constant into L7, then use sfpiadd to compute
+    // (src - L7) and compare that against 0. But this changes semantics.
+    //
+    // Simpler: just use sfpsetcc with the loaded value as lreg_c and set
+    // imm12=0 with the right mod1 adjustment. The comparison modes for
+    // float compare are: LT, GE etc. Comparing L7 (=constant) against
+    // 0 with src in lreg_c doesn't make sense.
+    //
+    // The real answer: for float comparisons with large constants, the
+    // constant should be loaded into a register and the comparison should
+    // use a register-register form. But SFPSETCC only has reg-imm form.
+    //
+    // Best approach: swap the operands — put the loaded constant as lreg_c
+    // and the original source as the immediate (0), then flip the comparison
+    // direction in mod1. OR: just use sfpxfcmpv (vector-vector compare)
+    // pattern from the sfpi_builtins.h which maps to sfpsetcc(a, 0, mod).
+    //
+    // For now: swap src ↔ constant. sfpsetcc(0, L7, dest, mod1) compares
+    // L7 against 0 — not what we want. We need (original_src <op> constant).
+    //
+    // Actually the sfpi compat header defines:
+    //   sfpxfcmps(v, f, mod) → sfpsetcc(v, f, mod), 0
+    // So sfpsetcc args are: (imm=f, src=v, dest=0, mod1=mod)
+    // The hardware does: compare src(=v) against imm(=f) with mode mod1.
+    //
+    // To use register form: sfpsetcc(imm=0, src=v, dest=0, mod1=mod)
+    // But this compares v against 0, not against the constant.
+    //
+    // The only way: load constant into a register, then subtract and compare
+    // against 0. This requires SFPIADD or similar. Too complex for now.
+    // Fall through to the error.
+  }
+
   unsigned RegOpc = getRegFormVariant(MI.getOpcode());
   if (!RegOpc)
     return false;
@@ -224,12 +282,8 @@ bool RISCVXttSFPUSynth::substituteRegForm(MachineInstr &MI,
 
   // SFPMULI/SFPADDI format: (dest, imm16, mod1)
   // SFPMUL/SFPADD format:   (dest, src_a, src_b, src_c, mod1)
-  // The scratch register (loaded immediate) becomes src_a.
-  // dest stays the same, src_b = dest (implicit in imm form),
-  // src_c = L9 (zero constant), mod1 stays the same.
   Register DestReg = MI.getOperand(0).getReg();
   unsigned Mod1 = 0;
-  // Find mod1 (last imm operand)
   for (unsigned I = MI.getNumOperands(); I > 0; --I) {
     if (MI.getOperand(I - 1).isImm()) {
       Mod1 = MI.getOperand(I - 1).getImm();
@@ -239,9 +293,9 @@ bool RISCVXttSFPUSynth::substituteRegForm(MachineInstr &MI,
 
   BuildMI(MBB, MI, DL, TII->get(RegOpc))
       .addReg(DestReg, RegState::Define)
-      .addReg(ScratchReg)         // src_a = loaded constant
-      .addReg(DestReg)            // src_b = original dest (accumulator)
-      .addReg(RISCV::L9)          // src_c = zero constant
+      .addReg(ScratchReg)
+      .addReg(DestReg)
+      .addReg(RISCV::L9)
       .addImm(Mod1);
 
   LLVM_DEBUG(dbgs() << "  Substituted register-form: " << *std::prev(
