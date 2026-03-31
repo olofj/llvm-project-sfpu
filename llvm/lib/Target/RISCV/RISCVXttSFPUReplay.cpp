@@ -239,6 +239,11 @@ bool RISCVXttSFPUReplay::runOnMachineFunction(MachineFunction &MF) {
   if (!STI->hasVendorXttSFPU())
     return false;
 
+  // WORKAROUND: Disable REPLAY to diagnose SFPU hang on BH silicon.
+  // When enabled, the pass emits execute-mode REPLAY instructions that
+  // may reference incorrectly loaded replay buffer entries.
+  return false;
+
   TII = STI->getInstrInfo();
 
   bool Changed = false;
