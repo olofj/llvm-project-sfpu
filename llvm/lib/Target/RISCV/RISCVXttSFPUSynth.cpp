@@ -216,10 +216,12 @@ unsigned RISCVXttSFPUSynth::getRegFormVariant(unsigned Opcode) const {
 
 bool RISCVXttSFPUSynth::substituteRegForm(MachineInstr &MI,
                                             Register ScratchReg) {
-  // Special case: SFPSETCC with wide immediate.
-  // Load constant into L7, then emit sfpsetcc with imm=0.
-  // With imm=0, the SFPU hardware uses the previously-loaded register
-  // value for comparison (this is how sfpxfcmpv vector compare works).
+  // Special case: SFPSETCC with wide immediate (scalar float compare).
+  // The comparison value was loaded into L7 by expandImmediate.
+  // To compare src against L7, compute diff = src - L7 using SFPMAD,
+  // then test diff against zero with SFPSETCC.
+  // SFPMAD(dest, src_a, src_b, src_c, mod1=NEGATE_VA):
+  //   dest = (-src_a) * src_b + src_c = src_c - src_a (when src_b=L10=1.0)
   if (MI.getOpcode() == RISCV::SFPSETCC) {
     MachineBasicBlock &MBB = *MI.getParent();
     DebugLoc DL = MI.getDebugLoc();
@@ -227,13 +229,24 @@ bool RISCVXttSFPUSynth::substituteRegForm(MachineInstr &MI,
     Register SrcReg = MI.getOperand(1).getReg();
     unsigned LregDest = MI.getOperand(2).getImm();
     unsigned Mod1 = MI.getOperand(3).getImm();
-    // L7 was loaded by expandImmediate before calling substituteRegForm.
-    // Emit sfpsetcc with imm=0 to use the loaded value.
+
+    // Compute L7 = SrcReg - L7 (comparison value)
+    // SFPMAD(L7, L7, L10(1.0), SrcReg, 1=NEGATE_VA)
+    //   = (-L7) * 1.0 + SrcReg = SrcReg - L7
+    BuildMI(MBB, MI, DL, TII->get(RISCV::SFPMAD))
+        .addReg(RISCV::L7, RegState::Define)
+        .addReg(RISCV::L7)     // src_a = comparison value
+        .addReg(RISCV::L10)    // src_b = 1.0 (constant)
+        .addReg(SrcReg)        // src_c = value being compared
+        .addImm(1);            // mod1 = NEGATE_VA (negate src_a)
+
+    // Test L7 (= SrcReg - comp_value) against zero
     BuildMI(MBB, MI, DL, TII->get(RISCV::SFPSETCC))
-        .addImm(0)            // imm12 = 0 (use previously loaded value)
-        .addReg(SrcReg)       // lreg_c = original source vector
-        .addImm(LregDest)     // lreg_dest = same CC mode
-        .addImm(Mod1);        // mod1 = same comparison type
+        .addImm(0)
+        .addReg(RISCV::L7)
+        .addImm(LregDest)
+        .addImm(Mod1);
+
     MI.eraseFromParent();
     return true;
   }
