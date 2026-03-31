@@ -32,10 +32,12 @@
 #include "RISCV.h"
 #include "RISCVInstrInfo.h"
 #include "RISCVSubtarget.h"
+#include "MCTargetDesc/RISCVBaseInfo.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/DenseSet.h"
 
 using namespace llvm;
 
@@ -78,7 +80,9 @@ public:
   }
 
 private:
-  static constexpr unsigned ReplayBufferSize = 32;
+  // The 32-entry replay buffer is shared: slots 0-15 for FPU, 16-31 for SFPU.
+  static constexpr unsigned ReplayBufferOffset = 16;  // SFPU starts here
+  static constexpr unsigned ReplayBufferSize = 16;    // SFPU gets 16 slots
   static constexpr unsigned MinSequenceLength = 4;
 
   const RISCVSubtarget *STI = nullptr;
@@ -149,12 +153,13 @@ void RISCVXttSFPUReplay::findCandidates(
     MachineBasicBlock &MBB,
     SmallVectorImpl<ReplayCandidate> &Candidates) {
 
-  // Collect all SFPU instructions in the block
+  // Collect all SFPU instructions in the block (excluding TTREPLAY itself).
+  // Use TSFlags to identify SFPU instructions — covers all current and future
+  // SFPU opcodes without relying on fragile enum ordering.
   SmallVector<MachineInstr *, 64> SFPUInstrs;
   for (MachineInstr &MI : MBB) {
-    // Check if this is an SFPU instruction by opcode range
-    unsigned Opc = MI.getOpcode();
-    if (Opc >= RISCV::SFPLOAD_BH && Opc <= RISCV::SFPMOV_CONFIG)
+    if ((MI.getDesc().TSFlags & RISCVII::IsXttSFPUMask) &&
+        MI.getOpcode() != RISCV::TTREPLAY)
       SFPUInstrs.push_back(&MI);
   }
 
@@ -189,14 +194,18 @@ void RISCVXttSFPUReplay::findCandidates(
       Cand.StartIdx = Positions[0];
       Cand.Length = Len;
 
+      // Track the end of the last accepted region to ensure no overlaps.
+      unsigned LastEnd = Positions[0] + Len;
       for (unsigned K = 1; K < Positions.size(); ++K) {
-        // Verify non-overlapping
-        if (Positions[K] < Positions[0] + Len)
+        // Verify non-overlapping with original and all previous clones
+        if (Positions[K] < LastEnd)
           continue;
 
         ArrayRef<MachineInstr *> Clone(SFPUInstrs.data() + Positions[K], Len);
-        if (sequencesMatch(Original, Clone))
+        if (sequencesMatch(Original, Clone)) {
           Cand.CloneStarts.push_back(Positions[K]);
+          LastEnd = Positions[K] + Len;
+        }
       }
 
       if (!Cand.CloneStarts.empty()) {
@@ -218,11 +227,55 @@ void RISCVXttSFPUReplay::allocateBuffer(
                return A.Savings > B.Savings;
              });
 
+  // Track which instruction indices are already claimed by a selected
+  // candidate (original or clone). This prevents overlapping selections.
+  DenseSet<unsigned> UsedIndices;
   unsigned BufferUsed = 0;
 
   for (ReplayCandidate &Cand : Candidates) {
     if (BufferUsed + Cand.Length > ReplayBufferSize)
-      continue;  // Doesn't fit
+      continue;  // Doesn't fit in replay buffer
+
+    // Check that the original doesn't overlap with already-selected regions
+    bool OriginalOverlaps = false;
+    for (unsigned I = Cand.StartIdx; I < Cand.StartIdx + Cand.Length; ++I) {
+      if (UsedIndices.count(I)) {
+        OriginalOverlaps = true;
+        break;
+      }
+    }
+    if (OriginalOverlaps)
+      continue;
+
+    // Filter out clones that overlap with already-selected regions
+    SmallVector<unsigned, 8> ValidClones;
+    for (unsigned CloneStart : Cand.CloneStarts) {
+      bool Overlaps = false;
+      for (unsigned I = CloneStart; I < CloneStart + Cand.Length; ++I) {
+        if (UsedIndices.count(I)) {
+          Overlaps = true;
+          break;
+        }
+      }
+      if (!Overlaps)
+        ValidClones.push_back(CloneStart);
+    }
+
+    if (ValidClones.empty())
+      continue;
+
+    // Update the candidate with only valid (non-overlapping) clones
+    Cand.CloneStarts = std::move(ValidClones);
+    Cand.computeSavings();
+    if (Cand.Savings <= 0)
+      continue;
+
+    // Mark all indices as used
+    for (unsigned I = Cand.StartIdx; I < Cand.StartIdx + Cand.Length; ++I)
+      UsedIndices.insert(I);
+    for (unsigned CloneStart : Cand.CloneStarts)
+      for (unsigned I = CloneStart; I < CloneStart + Cand.Length; ++I)
+        UsedIndices.insert(I);
 
     Selected.push_back(&Cand);
     BufferUsed += Cand.Length;
@@ -238,11 +291,6 @@ bool RISCVXttSFPUReplay::runOnMachineFunction(MachineFunction &MF) {
   LLVM_DEBUG(dbgs() << getPassName() << " on " << MF.getName() << "\n");
   if (!STI->hasVendorXttSFPU())
     return false;
-
-  // WORKAROUND: Disable REPLAY to diagnose SFPU hang on BH silicon.
-  // When enabled, the pass emits execute-mode REPLAY instructions that
-  // may reference incorrectly loaded replay buffer entries.
-  return false;
 
   TII = STI->getInstrInfo();
 
@@ -268,17 +316,17 @@ bool RISCVXttSFPUReplay::runOnMachineFunction(MachineFunction &MF) {
     // 1. First occurrence: emit normally (hardware records into replay buffer)
     //    Mark with REPLAY(start_idx, length, 0, 1) = "load" mode
     // 2. Each clone: replace entire sequence with single REPLAY instruction
-    //    REPLAY(start_idx, length, 1, 0) = "execute" mode
+    //    REPLAY(start_idx, length, 0, 0) = "execute" mode
     //
     // Collect all SFPU instructions to map candidates back to MachineInstrs
     SmallVector<MachineInstr *, 64> SFPUInstrs;
     for (MachineInstr &MI : MBB) {
-      unsigned Opc = MI.getOpcode();
-      if (Opc >= RISCV::SFPLOAD_BH && Opc <= RISCV::SFPMOV_CONFIG)
+      if ((MI.getDesc().TSFlags & RISCVII::IsXttSFPUMask) &&
+          MI.getOpcode() != RISCV::TTREPLAY)
         SFPUInstrs.push_back(&MI);
     }
 
-    unsigned NextSlot = 0;
+    unsigned NextSlot = ReplayBufferOffset;
     for (ReplayCandidate *Cand : Selected) {
       unsigned Slot = NextSlot;
       NextSlot += Cand->Length;
@@ -305,7 +353,7 @@ bool RISCVXttSFPUReplay::runOnMachineFunction(MachineFunction &MF) {
             .addImm(1);              // load_mode = 1 (record)
       }
 
-      // Replace each clone with REPLAY(slot, len, 1, 0) = "execute" mode
+      // Replace each clone with REPLAY(slot, len, 0, 0) = "execute" mode
       for (unsigned CloneStart : Cand->CloneStarts) {
         if (CloneStart + Cand->Length > SFPUInstrs.size())
           continue;
@@ -318,11 +366,12 @@ bool RISCVXttSFPUReplay::runOnMachineFunction(MachineFunction &MF) {
         DebugLoc DL = FirstInClone->getDebugLoc();
 
         // Insert REPLAY in "execute" mode before the clone, then delete it.
+        // Replay uses (exec_while_load=0, load_mode=0) per lltt::replay().
         BuildMI(MBB, *FirstInClone, DL, TII->get(RISCV::TTREPLAY))
             .addImm(Slot)            // start_idx
             .addImm(Cand->Length)    // len
-            .addImm(1)               // exec_while_load = 1 (execute)
-            .addImm(0);              // load_mode = 0 (not recording)
+            .addImm(0)               // exec_while_load = 0
+            .addImm(0);              // load_mode = 0 (replay from buffer)
 
         // Delete the clone instructions and null out their SFPUInstrs entries
         for (unsigned J = 0; J < Cand->Length && CloneStart + J < SFPUInstrs.size(); ++J) {
