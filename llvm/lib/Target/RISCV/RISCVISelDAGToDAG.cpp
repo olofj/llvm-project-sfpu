@@ -2711,7 +2711,36 @@ void RISCVDAGToDAGISel::Select(SDNode *Node) {
       if (isa<ConstantSDNode>(Src))
         Src = CurDAG->getRegister(RISCV::L9, MVT::i32);
       SDValue Imm = SFPU_IMM(Node->getOperand(3));
-      SDValue Mod1 = SFPU_IMM(Node->getOperand(4));
+
+      // Translate SFPI API CC mode to hardware SFPSETCC mod1 encoding.
+      // The SFPI API (sfpi_constants.h) uses: CC_LT=1, CC_EQ=2, CC_GTE=3,
+      // CC_NE=4, CC_LTE=5, CC_GT=6.
+      // The hardware (C-020 spec) uses: LT0=0, BIT0=1, NE0=2, GTE0=4, EQ0=6.
+      // Format flags (FMT_A=8, FMT_B=16, FMT_FLOAT=32) occupy bits[5:3]
+      // and pass through unchanged.
+      unsigned ModVal = 0;
+      if (auto *C = dyn_cast<ConstantSDNode>(Node->getOperand(4))) {
+        unsigned ApiMod = C->getZExtValue();
+        unsigned CC = ApiMod & 0x7;  // comparison type
+        unsigned Fmt = ApiMod & 0x38; // format flags
+        // API → hardware CC translation
+        static const unsigned CCMap[] = {
+          0, // 0 = CC_NONE → 0
+          0, // 1 = CC_LT   → LREG_LT0  = 0
+          6, // 2 = CC_EQ   → LREG_EQ0  = 6
+          4, // 3 = CC_GTE  → LREG_GTE0 = 4
+          2, // 4 = CC_NE   → LREG_NE0  = 2
+          0, // 5 = CC_LTE  → (LT complement) = 0+COMP?
+          6, // 6 = CC_GT   → (EQ complement) = 6+COMP?
+          0, // 7 = reserved
+        };
+        unsigned HwCC = CCMap[CC];
+        ModVal = HwCC | Fmt;
+      } else {
+        ModVal = 0; // non-constant mod, shouldn't happen
+      }
+      SDValue Mod1 = CurDAG->getTargetConstant(ModVal, DL, MVT::i32);
+
       MachineSDNode *MI = CurDAG->getMachineNode(
           RISCV::SFPSETCC, DL, MVT::Other,
           {Imm, Src, CurDAG->getTargetConstant(0, DL, MVT::i32), Mod1, Chain});
@@ -2723,6 +2752,8 @@ void RISCVDAGToDAGISel::Select(SDNode *Node) {
       // pass handle wide immediates post-regalloc.
       SDValue Chain = Node->getOperand(0);
       SDValue Src = Node->getOperand(2);
+      if (auto *C = dyn_cast<ConstantSDNode>(Node->getOperand(4)))
+        LLVM_DEBUG(dbgs() << "SFPXFCMPS Mod1=" << C->getZExtValue() << "\n");
       if (isa<ConstantSDNode>(Src))
         Src = CurDAG->getRegister(RISCV::L9, MVT::i32);
       SDValue Imm = SFPU_IMM(Node->getOperand(3));
