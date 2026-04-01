@@ -2074,20 +2074,18 @@ void RISCVDAGToDAGISel::Select(SDNode *Node) {
     }
 
     // SFPSWAP: (dest_val, src_c_val, mod1)
-    // Both dest and src_c are swap operands. Use standard SFPSWAP (not _LV)
-    // to avoid register pressure. src_c_val goes to lreg_c; dest_val is
-    // passed but the RA assigns the dest register freely. The sfpselect2
-    // handler traces back to find src_c_val when idx=1 is requested.
+    // Use SFPSWAP_LV to tie dest to dest_val (required for correct clamping).
     case Intrinsic::riscv_tt_sfpswap: {
       SDValue Chain = Node->getOperand(0);
-      SDValue SrcCVal = Node->getOperand(3);  // b → goes to lreg_c
+      SDValue DestVal = Node->getOperand(2);  // a → tied to dest
+      SDValue SrcCVal = Node->getOperand(3);  // b → lreg_c
       SDValue Mod1 = SFPU_IMM(Node->getOperand(4));
       if (auto *C = dyn_cast<ConstantSDNode>(SrcCVal))
         SrcCVal = CurDAG->getRegister(RISCV::L0 + C->getZExtValue(), MVT::i32);
       SDValue Imm = CurDAG->getTargetConstant(0, DL, MVT::i32);
       MachineSDNode *Res = CurDAG->getMachineNode(
-          RISCV::SFPSWAP, DL, MVT::i32, MVT::Other,
-          {Imm, SrcCVal, Mod1, Chain});
+          RISCV::SFPSWAP_LV, DL, MVT::i32, MVT::Other,
+          {DestVal, Imm, SrcCVal, Mod1, Chain});
       ReplaceNode(Node, Res);
       return;
     }
@@ -2740,11 +2738,12 @@ void RISCVDAGToDAGISel::Select(SDNode *Node) {
       return;
     }
     case Intrinsic::riscv_tt_sfpconfig: {
-      // sfpconfig(imm16, vd, mod1) — all immediates
+      // sfpconfig(imm16, config_dest, mod1) — all immediates.
+      // Must convert to TargetConstants for the MachineNode.
       SDValue Chain = Node->getOperand(0);
-      SDValue Imm16 = Node->getOperand(2);
-      SDValue Vd = Node->getOperand(3);
-      SDValue Mod1 = Node->getOperand(4);
+      SDValue Imm16 = SFPU_IMM(Node->getOperand(2));
+      SDValue Vd = SFPU_IMM(Node->getOperand(3));
+      SDValue Mod1 = SFPU_IMM(Node->getOperand(4));
       MachineSDNode *Cfg = CurDAG->getMachineNode(
           RISCV::SFPCONFIG, DL, MVT::Other, {Imm16, Vd, Mod1, Chain});
       ReplaceNode(Node, Cfg);
