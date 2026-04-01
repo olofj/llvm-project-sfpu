@@ -2050,10 +2050,9 @@ void RISCVDAGToDAGISel::Select(SDNode *Node) {
       return;
     }
 
-    // SFPU logic/swap/shift2: (src, imm12, mod1) — same as standard unary
+    // SFPU logic/shift2: (src_c, imm12, mod1) — standard unary
     case Intrinsic::riscv_tt_sfpand:
     case Intrinsic::riscv_tt_sfpor:
-    case Intrinsic::riscv_tt_sfpswap:
     case Intrinsic::riscv_tt_sfpshft2: {
       SDValue Chain = Node->getOperand(0);
       SDValue Src = Node->getOperand(2);
@@ -2065,12 +2064,33 @@ void RISCVDAGToDAGISel::Select(SDNode *Node) {
       switch (IntNo) {
       case Intrinsic::riscv_tt_sfpand:   Opc = RISCV::SFPAND; break;
       case Intrinsic::riscv_tt_sfpor:    Opc = RISCV::SFPOR; break;
-      case Intrinsic::riscv_tt_sfpswap:  Opc = RISCV::SFPSWAP; break;
       case Intrinsic::riscv_tt_sfpshft2: Opc = RISCV::SFPSHFT2; break;
       default: llvm_unreachable("unhandled sfpu logic");
       }
       MachineSDNode *Res = CurDAG->getMachineNode(
           Opc, DL, MVT::i32, MVT::Other, {Imm, Src, Mod1, Chain});
+      ReplaceNode(Node, Res);
+      return;
+    }
+
+    // SFPSWAP: (dest_val, src_c_val, mod1)
+    // Both dest and src_c are swap operands. Use _lv form so the RA ties
+    // dest to the input value (ensuring it's in the right register).
+    // The src_c value goes to lreg_c via the standard unary encoding.
+    case Intrinsic::riscv_tt_sfpswap: {
+      SDValue Chain = Node->getOperand(0);
+      SDValue DestVal = Node->getOperand(2);  // value for dest register
+      SDValue SrcCVal = Node->getOperand(3);  // value for src_c register
+      SDValue Mod1 = SFPU_IMM(Node->getOperand(4));
+      if (auto *C = dyn_cast<ConstantSDNode>(SrcCVal))
+        SrcCVal = CurDAG->getRegister(RISCV::L0 + C->getZExtValue(), MVT::i32);
+      SDValue Imm = CurDAG->getTargetConstant(0, DL, MVT::i32);
+      // Use SFPSWAP_LV: ties dest output to DestVal input, ensuring the RA
+      // places DestVal in the dest register before the swap executes.
+      // lreg_c = SrcCVal (the other swap operand).
+      MachineSDNode *Res = CurDAG->getMachineNode(
+          RISCV::SFPSWAP_LV, DL, MVT::i32, MVT::Other,
+          {DestVal, Imm, SrcCVal, Mod1, Chain});
       ReplaceNode(Node, Res);
       return;
     }

@@ -753,6 +753,7 @@ def SFPSETMAN_LV : SFPUUnaryRegLV<0x83, "sfpsetman">;
 def SFPSETSGN_LV : SFPUUnaryRegLV<0x89, "sfpsetsgn">;
 def SFPCAST_LV   : SFPUUnaryRegLV<0x90, "sfpcast">;
 def SFPSHFT2_LV  : SFPUUnaryRegLV<0x94, "sfpshft2">;
+def SFPSWAP_LV   : SFPUUnaryRegLV<0x92, "sfpswap">;
 
 // --- 3-Operand _lv variants ---
 
