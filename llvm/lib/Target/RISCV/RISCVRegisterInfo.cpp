@@ -147,20 +147,35 @@ BitVector RISCVRegisterInfo::getReservedRegs(const MachineFunction &MF) const {
   // SiFive VCIX state registers.
   markSuperRegs(Reserved, RISCV::VCIX_STATE);
 
-  // SFPU LUT register reservation. SFPLUTFP32/SFPLUT instructions read
-  // coefficients from physical L0, L1, L2, L4, L5, L6 (hardware-implicit).
-  // Kernel init loads these via TTI_SFPLOADI (inline asm, opaque to RA).
-  // Reserve these registers so the RA only uses L3 and L7, preventing
-  // computation from clobbering the LUT values.
-  // Conservative: reserve for ALL SFPU functions. Kernels that don't use
-  // LUT get 2 fewer registers but still work correctly.
+  // SFPU LUT register reservation: only reserve L0,L1,L2,L4,L5,L6 for
+  // functions that use SFPLUTFP32 (which reads these physical registers
+  // implicitly). Kernel init loads LUT coefficients via TTI_SFPLOADI
+  // (inline asm that LLVM's RA doesn't track). Without reservation, the
+  // RA reuses these registers and clobbers the LUT values.
+  // Functions without LUT operations keep all 8 registers allocatable.
   if (Subtarget.hasVendorXttSFPU()) {
-    markSuperRegs(Reserved, RISCV::L0);
-    markSuperRegs(Reserved, RISCV::L1);
-    markSuperRegs(Reserved, RISCV::L2);
-    markSuperRegs(Reserved, RISCV::L4);
-    markSuperRegs(Reserved, RISCV::L5);
-    markSuperRegs(Reserved, RISCV::L6);
+    const Function &F = MF.getFunction();
+    bool UsesLUT = false;
+    for (const auto &BB : F)
+      for (const auto &I : BB)
+        if (const auto *CB = dyn_cast<CallBase>(&I))
+          if (const auto *Callee = CB->getCalledFunction())
+            if (Callee->getName().contains("sfplutfp32") ||
+                Callee->getName().contains("sfplut"))
+              UsesLUT = true;
+    if (UsesLUT) {
+      // L0,L1,L2: LUT coefficients table A
+      // L4,L5,L6: LUT coefficients table B
+      // L7: clobbered by SFPLUTFP32 (implicit def in instruction)
+      // Only L3 remains allocatable — matches GCC's gelu register usage.
+      markSuperRegs(Reserved, RISCV::L0);
+      markSuperRegs(Reserved, RISCV::L1);
+      markSuperRegs(Reserved, RISCV::L2);
+      markSuperRegs(Reserved, RISCV::L4);
+      markSuperRegs(Reserved, RISCV::L5);
+      markSuperRegs(Reserved, RISCV::L6);
+      markSuperRegs(Reserved, RISCV::L7);
+    }
   }
 
   if (MF.getFunction().getCallingConv() == CallingConv::GRAAL) {

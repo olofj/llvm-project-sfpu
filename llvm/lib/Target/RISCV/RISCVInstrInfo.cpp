@@ -626,13 +626,19 @@ void RISCVInstrInfo::storeRegToStackSlot(MachineBasicBlock &MBB,
   else if (RISCV::VRN8M1RegClass.hasSubClassEq(RC))
     Opcode = RISCV::PseudoVSPILL8_M1;
   else if (RISCV::SFPURegsRegClass.hasSubClassEq(RC)) {
-    // SFPU register spill: store to reserved DEST rows via SFPSTORE.
-    // sfpstore operands: src_reg, mod0, addr_mode, addr
-    // Uses DEST rows 14-15 as scratch (unlikely to conflict with data).
+    // SFPU register spill: store to DEST via SFPSTORE.
+    // SFPU register spill: store to DEST via SFPSTORE.
+    // Uses upper DEST rows as spill area. Each spill slot gets a unique
+    // DEST address computed from the frame index. Kernel data typically
+    // occupies low DEST addresses (0-7 for 8 iterations); spill area
+    // starts at offset 100 to avoid conflict.
     auto &Subtarget = MF->getSubtarget<RISCVSubtarget>();
     unsigned StoreOpc = Subtarget.hasVendorXttSFPUBH()
                             ? RISCV::SFPSTORE_BH : RISCV::SFPSTORE_WH;
-    unsigned SpillAddr = 14 + (FI & 1);
+    // Map frame index to a DEST address in the spill area.
+    // FI can be negative; use abs + offset to get a valid DEST address.
+    unsigned SpillAddr = 100 + (unsigned)(FI < 0 ? -FI : FI);
+    if (SpillAddr > 8191) SpillAddr = 8191; // clamp to 13-bit addr field
     BuildMI(MBB, I, DebugLoc(), get(StoreOpc))
         .addReg(SrcReg, getKillRegState(IsKill))
         .addImm(7)              // mod0 = 7 (standard)
@@ -724,12 +730,12 @@ void RISCVInstrInfo::loadRegFromStackSlot(MachineBasicBlock &MBB,
   else if (RISCV::VRN8M1RegClass.hasSubClassEq(RC))
     Opcode = RISCV::PseudoVRELOAD8_M1;
   else if (RISCV::SFPURegsRegClass.hasSubClassEq(RC)) {
-    // SFPU register reload: load from DEST row via SFPLOAD.
-    // sfpload operands: dest_reg, mod0, addr_mode, addr
+    // SFPU register reload: load from DEST via SFPLOAD.
     auto &Subtarget = MF->getSubtarget<RISCVSubtarget>();
     unsigned LoadOpc = Subtarget.hasVendorXttSFPUBH()
                            ? RISCV::SFPLOAD_BH : RISCV::SFPLOAD_WH;
-    unsigned SpillAddr = 14 + (FI & 1);
+    unsigned SpillAddr = 100 + (unsigned)(FI < 0 ? -FI : FI);
+    if (SpillAddr > 8191) SpillAddr = 8191;
     BuildMI(MBB, I, DebugLoc(), get(LoadOpc), DstReg)
         .addImm(7)              // mod0 = 7 (standard)
         .addImm(0)              // addr_mode = 0
