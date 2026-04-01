@@ -579,6 +579,8 @@ def TTREPLAY : RVInstTensix<0x04,
 // These are alternative encodings for the same opcodes, selected by subtarget.
 //===----------------------------------------------------------------------===//
 
+// WH-specific load/store: same opcodes as BH but different field widths.
+// isCodeGenOnly prevents decoder table conflicts with BH variants.
 let Predicates = [HasXttSFPUWH] in {
 
 def SFPLOAD_WH : SFPULoadWH<0x70, "sfpload",
@@ -586,6 +588,7 @@ def SFPLOAD_WH : SFPULoadWH<0x70, "sfpload",
     (ins uimm4_sfpu:$mod0, uimm2_sfpu:$addr_mode, uimm14_sfpu:$addr),
     "$lreg_ind, $mod0, $addr_mode, $addr"> {
   let mayLoad = 1;
+  let isCodeGenOnly = 1;
 }
 
 def SFPSTORE_WH : SFPULoadWH<0x72, "sfpstore",
@@ -594,10 +597,8 @@ def SFPSTORE_WH : SFPULoadWH<0x72, "sfpstore",
          uimm2_sfpu:$addr_mode, uimm14_sfpu:$addr),
     "$lreg_ind, $mod0, $addr_mode, $addr"> {
   let mayStore = 1;
+  let isCodeGenOnly = 1;
 }
-
-// SFPLUT uses the same format on WH and BH (no addr_mode field)
-// So we don't need a separate WH definition — SFPLUT above is arch-independent.
 
 def SFPLOADMACRO_WH : SFPULoadWH<0x93, "sfploadmacro",
     (outs),
@@ -606,6 +607,7 @@ def SFPLOADMACRO_WH : SFPULoadWH<0x93, "sfploadmacro",
     "$lreg_ind, $mod0, $addr_mode, $addr"> {
   let mayLoad = 1;
   let Defs = [L16];
+  let isCodeGenOnly = 1;
 }
 
 } // Predicates = [HasXttSFPUWH]
@@ -625,7 +627,7 @@ def SFPLOADMACRO_WH : SFPULoadWH<0x93, "sfploadmacro",
 
 let Predicates = [HasXttSFPUWH] in {
 
-let Constraints = "$lreg_dest = $lreg_src_a" in {
+let Constraints = "$lreg_dest = $lreg_src_a", isCodeGenOnly = 1 in {
   def SFPMAD_WH : SFPU3Op<0x84, "sfpmad">;
   def SFPMUL_WH : SFPU3Op<0x86, "sfpmul">;
   def SFPADD_WH : SFPU3Op<0x85, "sfpadd">;
@@ -670,6 +672,7 @@ def SFPMOV_REG : SFPUUnary<0x7C, "sfpmov",
     (ins SFPUAllRegs:$lreg_c, uimm4_sfpu:$mod1),
     "$lreg_dest, $lreg_c, $mod1"> {
   let imm12 = 0;
+  let isCodeGenOnly = 1;
 }
 
 // SFPNOP is trivially dead — safe to eliminate
@@ -695,7 +698,9 @@ def : InstAlias<"sfpnop", (SFPNOP)>;
 
 let Predicates = [HasXttSFPU] in {
 
-// _lv Unary: dest must be tied to live_val (same register)
+// _lv Unary: dest must be tied to live_val (same register).
+// isCodeGenOnly: same encoding as non-_lv, used only during codegen.
+// Without this, the decoder table has conflicts and skips these opcodes.
 class SFPUUnaryRegLV<bits<8> opcode, string opcodestr>
     : SFPUUnary<opcode, opcodestr,
                 (outs SFPURegs:$lreg_dest),
@@ -703,9 +708,11 @@ class SFPUUnaryRegLV<bits<8> opcode, string opcodestr>
                      SFPUAllRegs:$lreg_c, uimm4_sfpu:$mod1),
                 "$lreg_dest, $live_val, $lreg_c, $imm12, $mod1"> {
   let Constraints = "$lreg_dest = $live_val";
+  let isCodeGenOnly = 1;
 }
 
-// _lv 3-Op: dest must be tied to live_val
+// _lv 3-Op: dest must be tied to live_val.
+// isCodeGenOnly: same encoding as non-_lv.
 class SFPU3OpLV<bits<8> opcode, string opcodestr>
     : RVInstTensix<opcode,
                    (outs SFPURegs:$lreg_dest),
@@ -715,6 +722,7 @@ class SFPU3OpLV<bits<8> opcode, string opcodestr>
                    opcodestr,
                    "$lreg_dest, $live_val, $lreg_src_a, $lreg_src_b, $lreg_src_c, $mod1",
                    []> {
+  let isCodeGenOnly = 1;
   bits<4> lreg_src_a;
   bits<4> lreg_src_b;
   bits<4> lreg_src_c;
@@ -761,6 +769,7 @@ def SFPLOAD_BH_LV : SFPULoadBH<0x70, "sfpload",
     "$lreg_ind, $live_val, $mod0, $addr_mode, $addr"> {
   let mayLoad = 1;
   let Constraints = "$lreg_ind = $live_val";
+  let isCodeGenOnly = 1;
 }
 
 def SFPLOAD_WH_LV : SFPULoadWH<0x70, "sfpload",
@@ -770,6 +779,7 @@ def SFPLOAD_WH_LV : SFPULoadWH<0x70, "sfpload",
     "$lreg_ind, $live_val, $mod0, $addr_mode, $addr"> {
   let mayLoad = 1;
   let Constraints = "$lreg_ind = $live_val";
+  let isCodeGenOnly = 1;
 }
 
 } // Predicates = [HasXttSFPU]

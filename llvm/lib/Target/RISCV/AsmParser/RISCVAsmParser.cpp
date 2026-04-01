@@ -227,6 +227,7 @@ class RISCVAsmParser : public MCTargetAsmParser {
   bool parseDirectiveOption();
   bool parseDirectiveAttribute();
   bool parseDirectiveInsn(SMLoc L);
+  bool parseDirectiveTTInsn(SMLoc L);
   bool parseDirectiveVariantCC();
 
   /// Helper to reset target features for a new arch string. It
@@ -2773,6 +2774,8 @@ ParseStatus RISCVAsmParser::parseDirective(AsmToken DirectiveID) {
     return parseDirectiveAttribute();
   if (IDVal == ".insn")
     return parseDirectiveInsn(DirectiveID.getLoc());
+  if (IDVal == ".ttinsn")
+    return parseDirectiveTTInsn(DirectiveID.getLoc());
   if (IDVal == ".variant_cc")
     return parseDirectiveVariantCC();
 
@@ -3155,6 +3158,35 @@ bool RISCVAsmParser::parseDirectiveInsn(SMLoc L) {
   return MatchAndEmitInstruction(L, Opcode, Operands, Parser.getStreamer(),
                                  ErrorInfo,
                                  /*MatchingInlineAsm=*/false);
+}
+
+/// parseDirectiveTTInsn
+///  ::= .ttinsn expression
+/// Emits a Tenstorrent Tensix/SFPU instruction word with ROL2 encoding.
+/// The expression is the logical (pre-encoding) 32-bit instruction value.
+/// ROL2 is applied before emission: encoded = (value << 2) | (value >> 30).
+bool RISCVAsmParser::parseDirectiveTTInsn(SMLoc L) {
+  MCAsmParser &Parser = getParser();
+
+  int64_t Value;
+  if (Parser.parseIntToken(Value, "expected an integer constant"))
+    return true;
+
+  if (!isUInt<32>(Value))
+    return Error(L, ".ttinsn operand must be a 32-bit value");
+
+  if (Parser.parseEOL("unexpected token after .ttinsn operand")) {
+    Parser.eatToEndOfStatement();
+    return true;
+  }
+
+  // Apply ROL2 encoding: rotate left by 2 bits
+  uint32_t Imm = static_cast<uint32_t>(Value);
+  uint32_t Encoded = (Imm << 2) | (Imm >> 30);
+
+  // Emit the 4 bytes as little-endian data
+  getStreamer().emitIntValue(Encoded, 4);
+  return false;
 }
 
 /// parseDirectiveVariantCC

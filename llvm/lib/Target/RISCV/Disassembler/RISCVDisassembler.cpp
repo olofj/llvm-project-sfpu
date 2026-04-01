@@ -691,6 +691,29 @@ DecodeStatus RISCVDisassembler::getInstruction(MCInst &MI, uint64_t &Size,
                                                ArrayRef<uint8_t> Bytes,
                                                uint64_t Address,
                                                raw_ostream &CS) const {
+  // Tenstorrent SFPU/Tensix instructions use ROL2 encoding: the MCCodeEmitter
+  // applies (word << 2) | (word >> 30) before writing to the ELF. After ROL2,
+  // bits[1:0] contain the top 2 opcode bits rather than the standard RISC-V
+  // 0b11 marker, so these instructions look like 16-bit unknowns to the normal
+  // decoder. We must try Tensix decoding FIRST, before the bits[1:0] dispatch.
+  if (STI.hasFeature(RISCV::FeatureVendorXttSFPU) && Bytes.size() >= 4) {
+    uint32_t Insn = support::endian::read32le(Bytes.data());
+    // Only try Tensix decode for words where bits[1:0] != 0b11 (not std RISC-V)
+    if ((Insn & 3) != 3) {
+      uint32_t Decoded = (Insn >> 2) | (Insn << 30);
+      DecodeStatus Result =
+          decodeInstruction(DecoderTableXttSFPU32, MI, Decoded, Address, this, STI);
+      if (Result != MCDisassembler::Fail) {
+        Size = 4;
+        return Result;
+      }
+      // Tensix decode failed but this is still a 4-byte coprocessor word —
+      // emit as unknown .word rather than splitting into two 16-bit unknowns.
+      Size = 4;
+      return MCDisassembler::Fail;
+    }
+  }
+
   // It's a 16 bit instruction if bit 0 and 1 are not 0b11.
   if ((Bytes[0] & 0b11) != 0b11)
     return getInstruction16(MI, Size, Bytes, Address, CS);
