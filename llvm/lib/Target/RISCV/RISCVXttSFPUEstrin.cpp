@@ -303,10 +303,6 @@ bool RISCVXttSFPUEstrin::runOnMachineFunction(MachineFunction &MF) {
   if (!STI->hasVendorXttSFPU())
     return false;
 
-  // TODO: Re-enable after fixing insertion point for wide Horner chains.
-  // The REPLAY pass has a separate crash on Estrin-restructured code.
-  return false;
-
   TII = STI->getInstrInfo();
   MRI = &MF.getRegInfo();
 
