@@ -2123,10 +2123,16 @@ void RISCVDAGToDAGISel::Select(SDNode *Node) {
       MachineSDNode *Lut = CurDAG->getMachineNode(
           RISCV::SFPLUTFP32, DL, MVT::i32, MVT::Other, {Src, Mod1, Chain});
       SDValue LutChain = SDValue(Lut, 1);
-      // Read result from physical L7 into a virtual register.
-      SDValue L7Val = CurDAG->getCopyFromReg(LutChain, DL, RISCV::L7, MVT::i32);
-      CurDAG->ReplaceAllUsesOfValueWith(SDValue(Node, 0), L7Val);
-      CurDAG->ReplaceAllUsesOfValueWith(SDValue(Node, 1), L7Val.getValue(1));
+      // Read L7 via SFPMOV → result stays in SFPURegs (not CopyFromReg
+      // which creates a GPR vreg requiring unsupported cross-class copy).
+      // L7 is defined by SFPLUTFP32's implicit-def, so the read is valid.
+      SDValue L7Src = CurDAG->getRegister(RISCV::L7, MVT::i32);
+      SDValue Zero = CurDAG->getTargetConstant(0, DL, MVT::i32);
+      MachineSDNode *Mov = CurDAG->getMachineNode(
+          RISCV::SFPMOV, DL, MVT::i32, MVT::Other,
+          {Zero, L7Src, Zero, LutChain});
+      CurDAG->ReplaceAllUsesOfValueWith(SDValue(Node, 0), SDValue(Mov, 0));
+      CurDAG->ReplaceAllUsesOfValueWith(SDValue(Node, 1), SDValue(Mov, 1));
       CurDAG->RemoveDeadNode(Node);
       return;
     }
@@ -2243,15 +2249,15 @@ void RISCVDAGToDAGISel::Select(SDNode *Node) {
       unsigned Idx = C->getZExtValue();
       assert(Idx < 16 && "L-register index out of range");
       unsigned PhysReg = RISCV::L0 + Idx;
-      // Read from physical L-register. For L0-L7 (allocatable), kernel
-      // code should use inline asm (handled by sfpi_compat.h) instead of
-      // this intrinsic, so this path is only for L8-L15 (constants/config).
-      SDValue Src = CurDAG->getRegister(PhysReg, MVT::i32);
-      SDValue Imm = CurDAG->getTargetConstant(0, DL, MVT::i32);
-      SDValue Mod1 = CurDAG->getTargetConstant(0, DL, MVT::i32);
-      MachineSDNode *Res = CurDAG->getMachineNode(
-          RISCV::SFPMOV, DL, MVT::i32, MVT::Other, {Imm, Src, Mod1, Chain});
-      ReplaceNode(Node, Res);
+      // For constant/config registers (L8-L15): return the physical register
+      // directly. Consumers (SFPMAD/SFPMUL) accept SFPUAllRegs sources,
+      // so they can read L8-L15 without an intermediate SFPMOV copy.
+      // This avoids consuming a scarce allocatable register just to hold
+      // a constant that's always available in a fixed physical register.
+      SDValue Reg = CurDAG->getRegister(PhysReg, MVT::i32);
+      CurDAG->ReplaceAllUsesOfValueWith(SDValue(Node, 0), Reg);
+      CurDAG->ReplaceAllUsesOfValueWith(SDValue(Node, 1), Chain);
+      CurDAG->RemoveDeadNode(Node);
       return;
     }
 
