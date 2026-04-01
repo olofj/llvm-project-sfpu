@@ -634,14 +634,16 @@ void RISCVInstrInfo::storeRegToStackSlot(MachineBasicBlock &MBB,
     auto &Subtarget = MF->getSubtarget<RISCVSubtarget>();
     unsigned StoreOpc = Subtarget.hasVendorXttSFPUBH()
                             ? RISCV::SFPSTORE_BH : RISCV::SFPSTORE_WH;
-    // Map frame index to a DEST address in the spill area.
-    // FI can be negative; use abs + offset to get a valid DEST address.
-    unsigned SpillAddr = 100 + (unsigned)(FI < 0 ? -FI : FI);
-    if (SpillAddr > 8191) SpillAddr = 8191; // clamp to 13-bit addr field
+    // Map frame index to a DEST row in the spill area.
+    // Kernel data occupies low DEST rows (0-15 for 8 elements × stride 2).
+    // Spill area starts at row 16. Use addr_mode=7 which the kernel
+    // framework configures for NOINC (SFPSTORE_ADDR_MODE_NOINC = 7 on BH).
+    unsigned SpillAddr = 16 + (unsigned)(FI < 0 ? -FI : FI) * 2;
+    if (SpillAddr > 8191) SpillAddr = 8191;
     BuildMI(MBB, I, DebugLoc(), get(StoreOpc))
         .addReg(SrcReg, getKillRegState(IsKill))
         .addImm(0)              // mod0 = 0 (SRCB format, 32-bit)
-        .addImm(3)              // addr_mode = 3 (default, no auto-increment)
+        .addImm(7)              // addr_mode = 7 (NOINC on BH)
         .addImm(SpillAddr);
     return;
   }
@@ -733,11 +735,11 @@ void RISCVInstrInfo::loadRegFromStackSlot(MachineBasicBlock &MBB,
     auto &Subtarget = MF->getSubtarget<RISCVSubtarget>();
     unsigned LoadOpc = Subtarget.hasVendorXttSFPUBH()
                            ? RISCV::SFPLOAD_BH : RISCV::SFPLOAD_WH;
-    unsigned SpillAddr = 100 + (unsigned)(FI < 0 ? -FI : FI);
+    unsigned SpillAddr = 16 + (unsigned)(FI < 0 ? -FI : FI) * 2;
     if (SpillAddr > 8191) SpillAddr = 8191;
     BuildMI(MBB, I, DebugLoc(), get(LoadOpc), DstReg)
         .addImm(0)              // mod0 = 0 (SRCB format, 32-bit)
-        .addImm(3)              // addr_mode = 3 (default, no auto-increment)
+        .addImm(7)              // addr_mode = 7 (NOINC on BH)
         .addImm(SpillAddr);
     return;
   }

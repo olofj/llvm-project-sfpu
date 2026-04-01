@@ -164,11 +164,6 @@ BitVector RISCVRegisterInfo::getReservedRegs(const MachineFunction &MF) const {
                 Callee->getName().contains("sfplut"))
               UsesLUT = true;
     if (UsesLUT) {
-      // L0,L1,L2: LUT coefficients table A
-      // L4,L5,L6: LUT coefficients table B
-      // L7 is NOT reserved: SFPLUTFP32's Defs=[L0,L1,L7] tells the RA
-      // it's clobbered at the instruction. L7 is usable between LUT calls.
-      // L3 and L7 remain allocatable (2 registers for computation).
       markSuperRegs(Reserved, RISCV::L0);
       markSuperRegs(Reserved, RISCV::L1);
       markSuperRegs(Reserved, RISCV::L2);
