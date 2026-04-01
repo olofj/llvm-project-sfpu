@@ -292,6 +292,19 @@ bool RISCVXttSFPUReplay::runOnMachineFunction(MachineFunction &MF) {
   if (!STI->hasVendorXttSFPU())
     return false;
 
+  // DISABLED: The pass counts only SFPU instructions for the replay buffer
+  // length, but the hardware replay buffer records ALL Tensix instructions
+  // in the instruction stream (including non-SFPU ops like INCRWC).  When
+  // non-SFPU instructions are interleaved with SFPU sequences, the replay
+  // length mismatch causes the buffer to record a truncated sequence and
+  // the replayed execution misses critical instructions (e.g., INCRWC for
+  // row advancement), producing wrong results on silicon.
+  //
+  // To fix: the pass must account for ALL interleaved instructions in the
+  // replay length, or restrict candidates to pure SFPU sequences with no
+  // non-SFPU instructions between them.
+  return false;
+
   TII = STI->getInstrInfo();
 
   bool Changed = false;
