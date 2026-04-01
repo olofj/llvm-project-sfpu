@@ -640,9 +640,11 @@ void RISCVInstrInfo::storeRegToStackSlot(MachineBasicBlock &MBB,
     // framework configures for NOINC (SFPSTORE_ADDR_MODE_NOINC = 7 on BH).
     unsigned SpillAddr = 16 + (unsigned)(FI < 0 ? -FI : FI) * 2;
     if (SpillAddr > 8191) SpillAddr = 8191;
+    // mod0=4 = BOB32 (Bag Of Bits 32): preserves all 32 bits raw,
+    // no format conversion. Critical for spilling arbitrary SFPU values.
     BuildMI(MBB, I, DebugLoc(), get(StoreOpc))
         .addReg(SrcReg, getKillRegState(IsKill))
-        .addImm(0)              // mod0 = 0 (SRCB format, 32-bit)
+        .addImm(4)              // mod0 = 4 (BOB32 on BH)
         .addImm(7)              // addr_mode = 7 (NOINC on BH)
         .addImm(SpillAddr);
     return;
@@ -738,7 +740,7 @@ void RISCVInstrInfo::loadRegFromStackSlot(MachineBasicBlock &MBB,
     unsigned SpillAddr = 16 + (unsigned)(FI < 0 ? -FI : FI) * 2;
     if (SpillAddr > 8191) SpillAddr = 8191;
     BuildMI(MBB, I, DebugLoc(), get(LoadOpc), DstReg)
-        .addImm(0)              // mod0 = 0 (SRCB format, 32-bit)
+        .addImm(4)              // mod0 = 4 (BOB32 on BH)
         .addImm(7)              // addr_mode = 7 (NOINC on BH)
         .addImm(SpillAddr);
     return;

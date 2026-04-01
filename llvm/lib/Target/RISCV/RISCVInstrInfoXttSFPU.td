@@ -359,10 +359,11 @@ class SFPULutFP32<bits<8> opcode, string opcodestr>
                 (ins SFPUAllRegs:$lreg_c, uimm4_sfpu:$mod1),
                 "$lreg_dest, $lreg_c, $mod1"> {
   let imm12 = 0;
-  // Hardware writes result to L7, also clobbers L0 and L1.
-  // The ISel produces a dead explicit output (RA assigns but value unused)
-  // and replaces value uses with physical L7 directly. This avoids
-  // consuming an allocatable register for the LUT result.
+  // Hardware writes result to the register specified by lreg_dest.
+  // GCC always encodes lreg_dest=L7. Force encoding to L7 regardless
+  // of what the RA assigns to $lreg_dest (the RA-assigned register is
+  // used for liveness tracking only; the encoding always writes L7).
+  let lreg_dest = 7;
   let Defs = [L0, L1, L7];
 }
 
