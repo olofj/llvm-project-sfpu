@@ -644,9 +644,13 @@ void RISCVInstrInfo::storeRegToStackSlot(MachineBasicBlock &MBB,
     // no format conversion. Critical for spilling arbitrary SFPU values.
     BuildMI(MBB, I, DebugLoc(), get(StoreOpc))
         .addReg(SrcReg, getKillRegState(IsKill))
-        .addImm(4)              // mod0 = 4 (BOB32 on BH)
+        .addImm(0)              // mod0 = 0 (SRCB format, matches kernel)
         .addImm(7)              // addr_mode = 7 (NOINC on BH)
         .addImm(SpillAddr);
+    // NOP after store to ensure DEST write completes before any reload.
+    // SFPSTORE is a 2-cycle instruction; without a NOP, a subsequent
+    // SFPLOAD from the same address may read stale data.
+    BuildMI(MBB, I, DebugLoc(), get(RISCV::SFPNOP));
     return;
   }
   else
@@ -740,7 +744,7 @@ void RISCVInstrInfo::loadRegFromStackSlot(MachineBasicBlock &MBB,
     unsigned SpillAddr = 16 + (unsigned)(FI < 0 ? -FI : FI) * 2;
     if (SpillAddr > 8191) SpillAddr = 8191;
     BuildMI(MBB, I, DebugLoc(), get(LoadOpc), DstReg)
-        .addImm(4)              // mod0 = 4 (BOB32 on BH)
+        .addImm(0)              // mod0 = 0 (SRCB format, matches kernel)
         .addImm(7)              // addr_mode = 7 (NOINC on BH)
         .addImm(SpillAddr);
     return;
