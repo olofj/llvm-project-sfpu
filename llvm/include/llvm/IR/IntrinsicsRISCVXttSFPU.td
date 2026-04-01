@@ -29,10 +29,13 @@ def int_riscv_tt_sfpload
                 [llvm_i32_ty, llvm_i32_ty, llvm_i32_ty],
                 [IntrReadMem, IntrHasSideEffects]>;
 
+// No ImmArg on sfploadi: mod0 is always constant in practice, but sfpi.h's
+// vFloat/vInt constructors pass it via a local variable that clang can't
+// validate as a constant expression. ISel uses SFPU_IMM() which works fine.
 def int_riscv_tt_sfploadi
     : Intrinsic<[llvm_i32_ty],
                 [llvm_i32_ty, llvm_i32_ty],
-                [IntrNoMem, IntrHasSideEffects, ImmArg<ArgIndex<0>>]>;
+                [IntrNoMem, IntrHasSideEffects]>;
 
 def int_riscv_tt_sfpstore
     : Intrinsic<[],

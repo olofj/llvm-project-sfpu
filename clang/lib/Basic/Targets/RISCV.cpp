@@ -92,6 +92,10 @@ bool RISCVTargetInfo::validateAsmConstraint(
     // A floating-point register.
     Info.setAllowsRegister();
     return true;
+  case 'l':
+    // An SFPU L-register (Tenstorrent XttSFPU extension).
+    Info.setAllowsRegister();
+    return true;
   case 'A':
     // An address that is held in a general-purpose register.
     Info.setAllowsMemory();

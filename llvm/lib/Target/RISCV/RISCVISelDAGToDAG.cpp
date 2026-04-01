@@ -2223,6 +2223,9 @@ void RISCVDAGToDAGISel::Select(SDNode *Node) {
 
     // sfpreadlreg: read from physical L-register by index (always constant
     // in practice, but flows through constexpr get() so no ImmArg).
+    // Kernel init code saves L0-L6 via sfpreadlreg before configuring
+    // constants, then restores via sfpwritelreg. Use CopyFromReg so the
+    // register allocator properly tracks the physical register read.
     case Intrinsic::riscv_tt_sfpreadlreg: {
       SDValue Chain = Node->getOperand(0);
       SDValue IdxOp = Node->getOperand(2);
@@ -2230,38 +2233,16 @@ void RISCVDAGToDAGISel::Select(SDNode *Node) {
       assert(C && "sfpreadlreg index must be constant");
       unsigned Idx = C->getZExtValue();
       assert(Idx < 16 && "L-register index out of range");
-      SDValue Src = CurDAG->getRegister(RISCV::L0 + Idx, MVT::i32);
+      unsigned PhysReg = RISCV::L0 + Idx;
+      // Read from physical L-register. For L0-L7 (allocatable), kernel
+      // code should use inline asm (handled by sfpi_compat.h) instead of
+      // this intrinsic, so this path is only for L8-L15 (constants/config).
+      SDValue Src = CurDAG->getRegister(PhysReg, MVT::i32);
       SDValue Imm = CurDAG->getTargetConstant(0, DL, MVT::i32);
       SDValue Mod1 = CurDAG->getTargetConstant(0, DL, MVT::i32);
       MachineSDNode *Res = CurDAG->getMachineNode(
           RISCV::SFPMOV, DL, MVT::i32, MVT::Other, {Imm, Src, Mod1, Chain});
       ReplaceNode(Node, Res);
-      return;
-    }
-
-    // sfpwritelreg: write to physical L-register by constant index.
-    case Intrinsic::riscv_tt_sfpwritelreg: {
-      SDValue Chain = Node->getOperand(0);
-      SDValue Val = Node->getOperand(2);
-      auto *IdxC = dyn_cast<ConstantSDNode>(Node->getOperand(3));
-      assert(IdxC && "sfpwritelreg index must be constant");
-      unsigned Idx = IdxC->getZExtValue();
-      assert(Idx < 16 && "L-register index out of range");
-      if (auto *C = dyn_cast<ConstantSDNode>(Val))
-        Val = CurDAG->getRegister(RISCV::L0 + C->getZExtValue(), MVT::i32);
-      SDValue Imm = CurDAG->getTargetConstant(0, DL, MVT::i32);
-      SDValue Mod1 = CurDAG->getTargetConstant(0, DL, MVT::i32);
-      // Emit SFPMOV to compute the value, then copy to target register.
-      // The register allocator sees the SFPMOV result and the CopyToReg
-      // will ensure it ends up in the right physical register.
-      MachineSDNode *Mov = CurDAG->getMachineNode(
-          RISCV::SFPMOV, DL, MVT::i32, MVT::Other, {Imm, Val, Mod1, Chain});
-      SDValue MovResult = SDValue(Mov, 0);
-      SDValue MovChain = SDValue(Mov, 1);
-      unsigned PhysReg = RISCV::L0 + Idx;
-      SDValue Copy = CurDAG->getCopyToReg(MovChain, DL, PhysReg, MovResult);
-      CurDAG->ReplaceAllUsesOfValueWith(SDValue(Node, 0), Copy);
-      CurDAG->RemoveDeadNode(Node);
       return;
     }
 
@@ -2894,6 +2875,21 @@ void RISCVDAGToDAGISel::Select(SDNode *Node) {
       MachineSDNode *MI = CurDAG->getMachineNode(
           RISCV::SFPNOP, DL, MVT::Other, {Chain});
       ReplaceNode(Node, MI);
+      return;
+    }
+    // sfpwritelreg: write to physical L-register by constant index.
+    // Void-returning intrinsic — must be in INTRINSIC_VOID, not W_CHAIN.
+    case Intrinsic::riscv_tt_sfpwritelreg: {
+      SDValue Chain = Node->getOperand(0);
+      SDValue Val = Node->getOperand(2);
+      auto *IdxC = dyn_cast<ConstantSDNode>(Node->getOperand(3));
+      assert(IdxC && "sfpwritelreg index must be constant");
+      unsigned Idx = IdxC->getZExtValue();
+      assert(Idx < 16 && "L-register index out of range");
+      unsigned PhysReg = RISCV::L0 + Idx;
+      SDValue Copy = CurDAG->getCopyToReg(Chain, DL, PhysReg, Val);
+      CurDAG->ReplaceAllUsesOfValueWith(SDValue(Node, 0), Copy);
+      CurDAG->RemoveDeadNode(Node);
       return;
     }
     case Intrinsic::riscv_tt_sfpgt:

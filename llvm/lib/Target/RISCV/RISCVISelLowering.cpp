@@ -20639,6 +20639,7 @@ RISCVTargetLowering::getConstraintType(StringRef Constraint) const {
     default:
       break;
     case 'f':
+    case 'l': // SFPU L-register
       return C_RegisterClass;
     case 'I':
     case 'J':
@@ -20683,6 +20684,11 @@ RISCVTargetLowering::getRegForInlineAsmConstraint(const TargetRegisterInfo *TRI,
         return std::make_pair(0U, &RISCV::FPR32RegClass);
       if (Subtarget.hasStdExtD() && VT == MVT::f64)
         return std::make_pair(0U, &RISCV::FPR64RegClass);
+      break;
+    case 'l':
+      // SFPU L-register constraint for inline asm.
+      if (Subtarget.hasVendorXttSFPU())
+        return std::make_pair(0U, &RISCV::SFPURegsRegClass);
       break;
     default:
       break;
