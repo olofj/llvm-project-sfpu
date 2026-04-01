@@ -640,8 +640,8 @@ void RISCVInstrInfo::storeRegToStackSlot(MachineBasicBlock &MBB,
     if (SpillAddr > 8191) SpillAddr = 8191; // clamp to 13-bit addr field
     BuildMI(MBB, I, DebugLoc(), get(StoreOpc))
         .addReg(SrcReg, getKillRegState(IsKill))
-        .addImm(7)              // mod0 = 7 (standard)
-        .addImm(0)              // addr_mode = 0
+        .addImm(0)              // mod0 = 0 (SRCB format, 32-bit)
+        .addImm(3)              // addr_mode = 3 (default, no auto-increment)
         .addImm(SpillAddr);
     return;
   }
@@ -736,8 +736,8 @@ void RISCVInstrInfo::loadRegFromStackSlot(MachineBasicBlock &MBB,
     unsigned SpillAddr = 100 + (unsigned)(FI < 0 ? -FI : FI);
     if (SpillAddr > 8191) SpillAddr = 8191;
     BuildMI(MBB, I, DebugLoc(), get(LoadOpc), DstReg)
-        .addImm(7)              // mod0 = 7 (standard)
-        .addImm(0)              // addr_mode = 0
+        .addImm(0)              // mod0 = 0 (SRCB format, 32-bit)
+        .addImm(3)              // addr_mode = 3 (default, no auto-increment)
         .addImm(SpillAddr);
     return;
   }

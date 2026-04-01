@@ -2124,8 +2124,9 @@ void RISCVDAGToDAGISel::Select(SDNode *Node) {
           RISCV::SFPLUTFP32, DL, MVT::i32, MVT::Other, {Src, Mod1, Chain});
       SDValue LutChain = SDValue(Lut, 1);
       // Read L7 via SFPMOV → result stays in SFPURegs (not CopyFromReg
-      // which creates a GPR vreg requiring unsupported cross-class copy).
-      // L7 is defined by SFPLUTFP32's implicit-def, so the read is valid.
+      // which creates a GPR vreg). Physical L7 can't be used directly
+      // because the liveness pass may convert consumers to _LV variants
+      // with tied operands that require virtual registers.
       SDValue L7Src = CurDAG->getRegister(RISCV::L7, MVT::i32);
       SDValue Zero = CurDAG->getTargetConstant(0, DL, MVT::i32);
       MachineSDNode *Mov = CurDAG->getMachineNode(
