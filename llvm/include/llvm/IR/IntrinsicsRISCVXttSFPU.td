@@ -78,6 +78,9 @@ def int_riscv_tt_sfpiadd
 def int_riscv_tt_sfpshft
     : Intrinsic<[llvm_i32_ty], [llvm_i32_ty, llvm_i32_ty, llvm_i32_ty],
                 [IntrNoMem, IntrHasSideEffects]>;
+def int_riscv_tt_sfpshft_lv
+    : Intrinsic<[llvm_i32_ty], [llvm_i32_ty, llvm_i32_ty, llvm_i32_ty, llvm_i32_ty],
+                [IntrNoMem, IntrHasSideEffects]>;
 def int_riscv_tt_sfpsetcc
     : Intrinsic<[], [llvm_i32_ty, llvm_i32_ty, llvm_i32_ty],
                 [IntrNoMem, IntrHasSideEffects]>;

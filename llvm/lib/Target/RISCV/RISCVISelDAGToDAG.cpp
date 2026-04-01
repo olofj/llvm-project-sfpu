@@ -2074,23 +2074,20 @@ void RISCVDAGToDAGISel::Select(SDNode *Node) {
     }
 
     // SFPSWAP: (dest_val, src_c_val, mod1)
-    // Both dest and src_c are swap operands. Use _lv form so the RA ties
-    // dest to the input value (ensuring it's in the right register).
-    // The src_c value goes to lreg_c via the standard unary encoding.
+    // Both dest and src_c are swap operands. Use standard SFPSWAP (not _LV)
+    // to avoid register pressure. src_c_val goes to lreg_c; dest_val is
+    // passed but the RA assigns the dest register freely. The sfpselect2
+    // handler traces back to find src_c_val when idx=1 is requested.
     case Intrinsic::riscv_tt_sfpswap: {
       SDValue Chain = Node->getOperand(0);
-      SDValue DestVal = Node->getOperand(2);  // value for dest register
-      SDValue SrcCVal = Node->getOperand(3);  // value for src_c register
+      SDValue SrcCVal = Node->getOperand(3);  // b → goes to lreg_c
       SDValue Mod1 = SFPU_IMM(Node->getOperand(4));
       if (auto *C = dyn_cast<ConstantSDNode>(SrcCVal))
         SrcCVal = CurDAG->getRegister(RISCV::L0 + C->getZExtValue(), MVT::i32);
       SDValue Imm = CurDAG->getTargetConstant(0, DL, MVT::i32);
-      // Use SFPSWAP_LV: ties dest output to DestVal input, ensuring the RA
-      // places DestVal in the dest register before the swap executes.
-      // lreg_c = SrcCVal (the other swap operand).
       MachineSDNode *Res = CurDAG->getMachineNode(
-          RISCV::SFPSWAP_LV, DL, MVT::i32, MVT::Other,
-          {DestVal, Imm, SrcCVal, Mod1, Chain});
+          RISCV::SFPSWAP, DL, MVT::i32, MVT::Other,
+          {Imm, SrcCVal, Mod1, Chain});
       ReplaceNode(Node, Res);
       return;
     }
@@ -2150,6 +2147,7 @@ void RISCVDAGToDAGISel::Select(SDNode *Node) {
     case Intrinsic::riscv_tt_sfplz_lv:
     case Intrinsic::riscv_tt_sfpnot_lv:
     case Intrinsic::riscv_tt_sfparecip_lv:
+    case Intrinsic::riscv_tt_sfpshft_lv:
     case Intrinsic::riscv_tt_sfpsetexp_lv:
     case Intrinsic::riscv_tt_sfpsetman_lv:
     case Intrinsic::riscv_tt_sfpsetsgn_lv: {
@@ -2170,6 +2168,7 @@ void RISCVDAGToDAGISel::Select(SDNode *Node) {
       case Intrinsic::riscv_tt_sfplz_lv:     Opc = RISCV::SFPLZ_LV; break;
       case Intrinsic::riscv_tt_sfpnot_lv:    Opc = RISCV::SFPNOT_LV; break;
       case Intrinsic::riscv_tt_sfparecip_lv: Opc = RISCV::SFPARECIP_LV; break;
+    case Intrinsic::riscv_tt_sfpshft_lv: Opc = RISCV::SFPSHFT_LV; break;
       case Intrinsic::riscv_tt_sfpsetexp_lv: Opc = RISCV::SFPSETEXP_LV; break;
       case Intrinsic::riscv_tt_sfpsetman_lv: Opc = RISCV::SFPSETMAN_LV; break;
       case Intrinsic::riscv_tt_sfpsetsgn_lv: Opc = RISCV::SFPSETSGN_LV; break;

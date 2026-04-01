@@ -22117,6 +22117,8 @@ Value *CodeGenFunction::EmitRISCVBuiltinExpr(unsigned BuiltinID,
     ID = Intrinsic::riscv_tt_sfpexman_lv; break;
   case RISCV::BI__builtin_riscv_tt_sfpiadd:
     ID = Intrinsic::riscv_tt_sfpiadd; break;
+  case RISCV::BI__builtin_riscv_tt_sfpshft_lv:
+    ID = Intrinsic::riscv_tt_sfpshft_lv; break;
   case RISCV::BI__builtin_riscv_tt_sfpshft:
     ID = Intrinsic::riscv_tt_sfpshft; break;
   case RISCV::BI__builtin_riscv_tt_sfpsetcc:
