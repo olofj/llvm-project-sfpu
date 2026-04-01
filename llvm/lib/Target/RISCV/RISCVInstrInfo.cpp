@@ -625,9 +625,21 @@ void RISCVInstrInfo::storeRegToStackSlot(MachineBasicBlock &MBB,
     Opcode = RISCV::PseudoVSPILL7_M1;
   else if (RISCV::VRN8M1RegClass.hasSubClassEq(RC))
     Opcode = RISCV::PseudoVSPILL8_M1;
-  else if (RISCV::SFPURegsRegClass.hasSubClassEq(RC))
-    llvm_unreachable("SFPU register spilling not yet implemented — "
-                     "reduce register pressure or report a bug");
+  else if (RISCV::SFPURegsRegClass.hasSubClassEq(RC)) {
+    // SFPU register spill: store to reserved DEST rows via SFPSTORE.
+    // sfpstore operands: src_reg, mod0, addr_mode, addr
+    // Uses DEST rows 14-15 as scratch (unlikely to conflict with data).
+    auto &Subtarget = MF->getSubtarget<RISCVSubtarget>();
+    unsigned StoreOpc = Subtarget.hasVendorXttSFPUBH()
+                            ? RISCV::SFPSTORE_BH : RISCV::SFPSTORE_WH;
+    unsigned SpillAddr = 14 + (FI & 1);
+    BuildMI(MBB, I, DebugLoc(), get(StoreOpc))
+        .addReg(SrcReg, getKillRegState(IsKill))
+        .addImm(7)              // mod0 = 7 (standard)
+        .addImm(0)              // addr_mode = 0
+        .addImm(SpillAddr);
+    return;
+  }
   else
     llvm_unreachable("Can't store this register to stack slot");
 
@@ -711,9 +723,19 @@ void RISCVInstrInfo::loadRegFromStackSlot(MachineBasicBlock &MBB,
     Opcode = RISCV::PseudoVRELOAD7_M1;
   else if (RISCV::VRN8M1RegClass.hasSubClassEq(RC))
     Opcode = RISCV::PseudoVRELOAD8_M1;
-  else if (RISCV::SFPURegsRegClass.hasSubClassEq(RC))
-    llvm_unreachable("SFPU register spilling not yet implemented — "
-                     "reduce register pressure or report a bug");
+  else if (RISCV::SFPURegsRegClass.hasSubClassEq(RC)) {
+    // SFPU register reload: load from DEST row via SFPLOAD.
+    // sfpload operands: dest_reg, mod0, addr_mode, addr
+    auto &Subtarget = MF->getSubtarget<RISCVSubtarget>();
+    unsigned LoadOpc = Subtarget.hasVendorXttSFPUBH()
+                           ? RISCV::SFPLOAD_BH : RISCV::SFPLOAD_WH;
+    unsigned SpillAddr = 14 + (FI & 1);
+    BuildMI(MBB, I, DebugLoc(), get(LoadOpc), DstReg)
+        .addImm(7)              // mod0 = 7 (standard)
+        .addImm(0)              // addr_mode = 0
+        .addImm(SpillAddr);
+    return;
+  }
   else
     llvm_unreachable("Can't load this register from stack slot");
 

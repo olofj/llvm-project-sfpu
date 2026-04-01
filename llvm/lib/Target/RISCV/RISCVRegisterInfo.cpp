@@ -147,6 +147,22 @@ BitVector RISCVRegisterInfo::getReservedRegs(const MachineFunction &MF) const {
   // SiFive VCIX state registers.
   markSuperRegs(Reserved, RISCV::VCIX_STATE);
 
+  // SFPU LUT register reservation. SFPLUTFP32/SFPLUT instructions read
+  // coefficients from physical L0, L1, L2, L4, L5, L6 (hardware-implicit).
+  // Kernel init loads these via TTI_SFPLOADI (inline asm, opaque to RA).
+  // Reserve these registers so the RA only uses L3 and L7, preventing
+  // computation from clobbering the LUT values.
+  // Conservative: reserve for ALL SFPU functions. Kernels that don't use
+  // LUT get 2 fewer registers but still work correctly.
+  if (Subtarget.hasVendorXttSFPU()) {
+    markSuperRegs(Reserved, RISCV::L0);
+    markSuperRegs(Reserved, RISCV::L1);
+    markSuperRegs(Reserved, RISCV::L2);
+    markSuperRegs(Reserved, RISCV::L4);
+    markSuperRegs(Reserved, RISCV::L5);
+    markSuperRegs(Reserved, RISCV::L6);
+  }
+
   if (MF.getFunction().getCallingConv() == CallingConv::GRAAL) {
     if (Subtarget.hasStdExtE())
       report_fatal_error("Graal reserved registers do not exist in RVE");
