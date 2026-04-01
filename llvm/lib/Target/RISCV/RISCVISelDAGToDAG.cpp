@@ -2129,7 +2129,10 @@ void RISCVDAGToDAGISel::Select(SDNode *Node) {
     case Intrinsic::riscv_tt_sfpcast_lv:
     case Intrinsic::riscv_tt_sfplz_lv:
     case Intrinsic::riscv_tt_sfpnot_lv:
-    case Intrinsic::riscv_tt_sfparecip_lv: {
+    case Intrinsic::riscv_tt_sfparecip_lv:
+    case Intrinsic::riscv_tt_sfpsetexp_lv:
+    case Intrinsic::riscv_tt_sfpsetman_lv:
+    case Intrinsic::riscv_tt_sfpsetsgn_lv: {
       bool HasChain = Node->getNumValues() > 1;
       unsigned Base = HasChain ? 2 : 1;
       SDValue Live = Node->getOperand(Base);
@@ -2147,6 +2150,9 @@ void RISCVDAGToDAGISel::Select(SDNode *Node) {
       case Intrinsic::riscv_tt_sfplz_lv:     Opc = RISCV::SFPLZ_LV; break;
       case Intrinsic::riscv_tt_sfpnot_lv:    Opc = RISCV::SFPNOT_LV; break;
       case Intrinsic::riscv_tt_sfparecip_lv: Opc = RISCV::SFPARECIP_LV; break;
+      case Intrinsic::riscv_tt_sfpsetexp_lv: Opc = RISCV::SFPSETEXP_LV; break;
+      case Intrinsic::riscv_tt_sfpsetman_lv: Opc = RISCV::SFPSETMAN_LV; break;
+      case Intrinsic::riscv_tt_sfpsetsgn_lv: Opc = RISCV::SFPSETSGN_LV; break;
       default: llvm_unreachable("unhandled _lv unary");
       }
       // Check if node is WO_CHAIN or W_CHAIN (both possible depending on attrs)

@@ -196,8 +196,11 @@ def tt_sfpnot_lv    : RISCVBuiltin<"unsigned int(unsigned int, unsigned int, uns
 def tt_sfplz        : RISCVBuiltin<"unsigned int(unsigned int, unsigned int, unsigned int)">;
 def tt_sfplz_lv     : RISCVBuiltin<"unsigned int(unsigned int, unsigned int, unsigned int, unsigned int)">;
 def tt_sfpsetexp    : RISCVBuiltin<"unsigned int(unsigned int, unsigned int, unsigned int)">;
+def tt_sfpsetexp_lv : RISCVBuiltin<"unsigned int(unsigned int, unsigned int, unsigned int, unsigned int)">;
 def tt_sfpsetman    : RISCVBuiltin<"unsigned int(unsigned int, unsigned int, unsigned int)">;
+def tt_sfpsetman_lv : RISCVBuiltin<"unsigned int(unsigned int, unsigned int, unsigned int, unsigned int)">;
 def tt_sfpsetsgn    : RISCVBuiltin<"unsigned int(unsigned int, unsigned int, unsigned int)">;
+def tt_sfpsetsgn_lv : RISCVBuiltin<"unsigned int(unsigned int, unsigned int, unsigned int, unsigned int)">;
 
 // --- CC stack / predication ---
 def tt_sfppushc     : RISCVBuiltin<"void()">;

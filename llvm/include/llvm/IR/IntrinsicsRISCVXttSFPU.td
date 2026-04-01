@@ -107,11 +107,20 @@ def int_riscv_tt_sfplz
 def int_riscv_tt_sfpsetexp
     : Intrinsic<[llvm_i32_ty], [llvm_i32_ty, llvm_i32_ty, llvm_i32_ty],
                 [IntrNoMem, IntrHasSideEffects]>;
+def int_riscv_tt_sfpsetexp_lv
+    : Intrinsic<[llvm_i32_ty], [llvm_i32_ty, llvm_i32_ty, llvm_i32_ty, llvm_i32_ty],
+                [IntrNoMem, IntrHasSideEffects]>;
 def int_riscv_tt_sfpsetman
     : Intrinsic<[llvm_i32_ty], [llvm_i32_ty, llvm_i32_ty, llvm_i32_ty],
                 [IntrNoMem, IntrHasSideEffects]>;
+def int_riscv_tt_sfpsetman_lv
+    : Intrinsic<[llvm_i32_ty], [llvm_i32_ty, llvm_i32_ty, llvm_i32_ty, llvm_i32_ty],
+                [IntrNoMem, IntrHasSideEffects]>;
 def int_riscv_tt_sfpsetsgn
     : Intrinsic<[llvm_i32_ty], [llvm_i32_ty, llvm_i32_ty, llvm_i32_ty],
+                [IntrNoMem, IntrHasSideEffects]>;
+def int_riscv_tt_sfpsetsgn_lv
+    : Intrinsic<[llvm_i32_ty], [llvm_i32_ty, llvm_i32_ty, llvm_i32_ty, llvm_i32_ty],
                 [IntrNoMem, IntrHasSideEffects]>;
 
 //--- 3-Operand Arithmetic --- (no ImmArg — mod1 can be runtime)
