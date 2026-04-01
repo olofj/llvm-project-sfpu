@@ -2111,20 +2111,19 @@ void RISCVDAGToDAGISel::Select(SDNode *Node) {
 
     // SFPLUTFP32: (src_reg, mod1) — 2 args only
     case Intrinsic::riscv_tt_sfplutfp32: {
-      // SFPLUTFP32 always writes result to L7 (hardware behavior, Defs=[L0,L1,L7]).
-      // Force dest=L7 via CopyFromReg so the RA doesn't need to allocate
-      // a register for the output (there may be only L3 available, which
-      // is occupied by computation values).
+      // SFPLUTFP32 hardware always writes result to L7 (Defs=[L0,L1,L7]).
+      // Emit the instruction normally, then read L7 via CopyFromReg.
+      // The SFPLUTFP32 explicit output is dead (RA assigns but unused);
+      // the CopyFromReg(L7) provides the actual result as a virtual reg.
       SDValue Chain = Node->getOperand(0);
       SDValue Src = Node->getOperand(2);
       SDValue Mod1 = SFPU_IMM(Node->getOperand(3));
       if (auto *C = dyn_cast<ConstantSDNode>(Src))
         Src = CurDAG->getRegister(RISCV::L0 + C->getZExtValue(), MVT::i32);
-      // Emit SFPLUTFP32 with a virtual register output (RA assigns it).
       MachineSDNode *Lut = CurDAG->getMachineNode(
           RISCV::SFPLUTFP32, DL, MVT::i32, MVT::Other, {Src, Mod1, Chain});
-      // The result is in L7 (implicit def). Read it back via CopyFromReg.
       SDValue LutChain = SDValue(Lut, 1);
+      // Read result from physical L7 into a virtual register.
       SDValue L7Val = CurDAG->getCopyFromReg(LutChain, DL, RISCV::L7, MVT::i32);
       CurDAG->ReplaceAllUsesOfValueWith(SDValue(Node, 0), L7Val);
       CurDAG->ReplaceAllUsesOfValueWith(SDValue(Node, 1), L7Val.getValue(1));

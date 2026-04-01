@@ -359,7 +359,10 @@ class SFPULutFP32<bits<8> opcode, string opcodestr>
                 (ins SFPUAllRegs:$lreg_c, uimm4_sfpu:$mod1),
                 "$lreg_dest, $lreg_c, $mod1"> {
   let imm12 = 0;
-  // SFPLUTFP32 may write L0, L1, L7 depending on mode.
+  // Hardware writes result to L7, also clobbers L0 and L1.
+  // The ISel produces a dead explicit output (RA assigns but value unused)
+  // and replaces value uses with physical L7 directly. This avoids
+  // consuming an allocatable register for the LUT result.
   let Defs = [L0, L1, L7];
 }
 

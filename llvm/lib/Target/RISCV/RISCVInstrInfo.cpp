@@ -627,7 +627,6 @@ void RISCVInstrInfo::storeRegToStackSlot(MachineBasicBlock &MBB,
     Opcode = RISCV::PseudoVSPILL8_M1;
   else if (RISCV::SFPURegsRegClass.hasSubClassEq(RC)) {
     // SFPU register spill: store to DEST via SFPSTORE.
-    // SFPU register spill: store to DEST via SFPSTORE.
     // Uses upper DEST rows as spill area. Each spill slot gets a unique
     // DEST address computed from the frame index. Kernel data typically
     // occupies low DEST addresses (0-7 for 8 iterations); spill area
