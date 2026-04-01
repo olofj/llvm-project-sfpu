@@ -45,22 +45,24 @@ using namespace llvm;
 
 namespace {
 
-/// Represents a sequence of SFPU instructions that could be replayed.
+/// Represents a sequence of instructions that could be replayed.
 struct ReplayCandidate {
-  unsigned StartIdx;       // Index into the instruction list
-  unsigned Length;         // Number of instructions in the sequence
-  SmallVector<unsigned, 8> CloneStarts;  // Indices of clone occurrences
-  int Savings;             // Net instruction savings if replayed
+  unsigned StartIdx;         // Index into the SFPU instruction list
+  unsigned Length;           // Number of SFPU instructions in the sequence
+  unsigned HardwareLength;   // Total Tensix instructions (SFPU + interleaved
+                             // non-SFPU like INCRWC) — this is what the
+                             // hardware replay buffer actually counts
+  SmallVector<unsigned, 8> CloneStarts;  // SFPU-list indices of clone starts
+  int Savings;               // Net instruction savings if replayed
 
   unsigned numClones() const { return CloneStarts.size(); }
 
   void computeSavings() {
-    // Each clone saves (Length - 1) instructions (REPLAY replaces the clone
-    // but costs 1 instruction itself).
-    // Total savings: numClones * (Length - 1) - 1 (for the buffer setup)
-    if (numClones() > 0 && Length >= 4) {
+    // Each clone saves (HardwareLength - 1) instructions (REPLAY replaces the
+    // entire clone sequence but costs 1 instruction itself).
+    if (numClones() > 0 && HardwareLength >= 4) {
       Savings = static_cast<int>(numClones()) *
-                    static_cast<int>(Length - 1) - 1;
+                    static_cast<int>(HardwareLength - 1) - 1;
     } else {
       Savings = 0;
     }
@@ -94,6 +96,42 @@ private:
   /// Check if two instruction sequences are identical.
   bool sequencesMatch(ArrayRef<MachineInstr *> Seq1,
                       ArrayRef<MachineInstr *> Seq2) const;
+
+  /// Check if a MachineInstr is a Tensix coprocessor instruction (SFPU or
+  /// inline asm emitting .word/.ttinsn).  The hardware replay buffer records
+  /// ALL Tensix instructions, not just SFPU.
+  static bool isTensixInstr(const MachineInstr &MI) {
+    if (MI.getDesc().TSFlags & RISCVII::IsXttSFPUMask)
+      return true;
+    // Inline asm in compute kernels emits Tensix instructions (INCRWC,
+    // SETRWC, SETC16, etc.) via .word/.ttinsn directives.
+    return MI.isInlineAsm();
+  }
+
+  /// Count total Tensix instructions from First to Last (inclusive) in the
+  /// MBB.  Returns 0 if any non-Tensix (RISC-V) instruction is found in
+  /// the range, which means the sequence can't be replayed.
+  static unsigned countTensixInRange(const MachineInstr *First,
+                                     const MachineInstr *Last) {
+    unsigned Count = 0;
+    for (auto It = First->getIterator();; ++It) {
+      if (isTensixInstr(*It))
+        ++Count;
+      else
+        return 0;  // RISC-V instruction breaks the Tensix sequence
+      if (&*It == Last)
+        break;
+    }
+    return Count;
+  }
+
+  /// Check that ALL instructions (SFPU + interleaved non-SFPU) match between
+  /// two MBB ranges.  Both ranges must have the same number and types of
+  /// instructions.
+  bool fullRangeMatches(const MachineInstr *OrigFirst,
+                        const MachineInstr *OrigLast,
+                        const MachineInstr *CloneFirst,
+                        const MachineInstr *CloneLast) const;
 
   /// Find repeating SFPU instruction sequences in a basic block.
   void findCandidates(MachineBasicBlock &MBB,
@@ -149,6 +187,44 @@ bool RISCVXttSFPUReplay::sequencesMatch(ArrayRef<MachineInstr *> Seq1,
   return true;
 }
 
+bool RISCVXttSFPUReplay::fullRangeMatches(
+    const MachineInstr *OrigFirst, const MachineInstr *OrigLast,
+    const MachineInstr *CloneFirst, const MachineInstr *CloneLast) const {
+  auto OIt = OrigFirst->getIterator();
+  auto CIt = CloneFirst->getIterator();
+  auto OEnd = std::next(OrigLast->getIterator());
+  auto CEnd = std::next(CloneLast->getIterator());
+
+  while (OIt != OEnd && CIt != CEnd) {
+    const MachineInstr &OMI = *OIt;
+    const MachineInstr &CMI = *CIt;
+
+    if (OMI.isInlineAsm() && CMI.isInlineAsm()) {
+      // Compare inline asm by their asm string and immediate operands.
+      // Two inline asm instructions match if they produce the same bytes.
+      if (OMI.getNumOperands() != CMI.getNumOperands())
+        return false;
+      for (unsigned I = 0, E = OMI.getNumOperands(); I < E; ++I) {
+        const MachineOperand &OOp = OMI.getOperand(I);
+        const MachineOperand &COp = CMI.getOperand(I);
+        if (OOp.getType() != COp.getType())
+          return false;
+        if (OOp.isImm() && OOp.getImm() != COp.getImm())
+          return false;
+      }
+    } else if (OMI.getDesc().TSFlags & RISCVII::IsXttSFPUMask) {
+      // SFPU instructions — already matched by sequencesMatch, skip
+    } else {
+      // Type mismatch (one is inline asm, other is SFPU, or neither)
+      return false;
+    }
+
+    ++OIt;
+    ++CIt;
+  }
+  return OIt == OEnd && CIt == CEnd;
+}
+
 void RISCVXttSFPUReplay::findCandidates(
     MachineBasicBlock &MBB,
     SmallVectorImpl<ReplayCandidate> &Candidates) {
@@ -193,6 +269,7 @@ void RISCVXttSFPUReplay::findCandidates(
       ReplayCandidate Cand;
       Cand.StartIdx = Positions[0];
       Cand.Length = Len;
+      Cand.HardwareLength = Len;  // Updated later in runOnMachineFunction
 
       // Track the end of the last accepted region to ensure no overlaps.
       unsigned LastEnd = Positions[0] + Len;
@@ -233,7 +310,7 @@ void RISCVXttSFPUReplay::allocateBuffer(
   unsigned BufferUsed = 0;
 
   for (ReplayCandidate &Cand : Candidates) {
-    if (BufferUsed + Cand.Length > ReplayBufferSize)
+    if (BufferUsed + Cand.HardwareLength > ReplayBufferSize)
       continue;  // Doesn't fit in replay buffer
 
     // Check that the original doesn't overlap with already-selected regions
@@ -278,7 +355,7 @@ void RISCVXttSFPUReplay::allocateBuffer(
         UsedIndices.insert(I);
 
     Selected.push_back(&Cand);
-    BufferUsed += Cand.Length;
+    BufferUsed += Cand.HardwareLength;
 
     if (BufferUsed >= ReplayBufferSize)
       break;  // Buffer full
@@ -292,46 +369,14 @@ bool RISCVXttSFPUReplay::runOnMachineFunction(MachineFunction &MF) {
   if (!STI->hasVendorXttSFPU())
     return false;
 
-  // DISABLED: The pass counts only SFPU instructions for the replay buffer
-  // length, but the hardware replay buffer records ALL Tensix instructions
-  // in the instruction stream (including non-SFPU ops like INCRWC).  When
-  // non-SFPU instructions are interleaved with SFPU sequences, the replay
-  // length mismatch causes the buffer to record a truncated sequence and
-  // the replayed execution misses critical instructions (e.g., INCRWC for
-  // row advancement), producing wrong results on silicon.
-  //
-  // To fix: the pass must account for ALL interleaved instructions in the
-  // replay length, or restrict candidates to pure SFPU sequences with no
-  // non-SFPU instructions between them.
-  return false;
-
   TII = STI->getInstrInfo();
 
   bool Changed = false;
 
   for (MachineBasicBlock &MBB : MF) {
-    SmallVector<ReplayCandidate, 8> Candidates;
-    findCandidates(MBB, Candidates);
-
-    if (Candidates.empty())
-      continue;
-
-    SmallVector<ReplayCandidate *, 4> Selected;
-    allocateBuffer(Candidates, Selected);
-
-    // Emit REPLAY instructions for selected candidates.
-    //
-    // The REPLAY instruction encoding (from sfpu-ops-bh.h):
-    //   TT_OP_BH(0x04, (start_idx << 14) + (len << 4) +
-    //            (execute_while_loading << 1) + (load_mode << 0))
-    //
-    // Protocol:
-    // 1. First occurrence: emit normally (hardware records into replay buffer)
-    //    Mark with REPLAY(start_idx, length, 0, 1) = "load" mode
-    // 2. Each clone: replace entire sequence with single REPLAY instruction
-    //    REPLAY(start_idx, length, 0, 0) = "execute" mode
-    //
-    // Collect all SFPU instructions to map candidates back to MachineInstrs
+    // Collect SFPU instructions for candidate finding (matching is still
+    // SFPU-only — the interleaved non-SFPU instructions are verified
+    // separately via fullRangeMatches).
     SmallVector<MachineInstr *, 64> SFPUInstrs;
     for (MachineInstr &MI : MBB) {
       if ((MI.getDesc().TSFlags & RISCVII::IsXttSFPUMask) &&
@@ -339,65 +384,142 @@ bool RISCVXttSFPUReplay::runOnMachineFunction(MachineFunction &MF) {
         SFPUInstrs.push_back(&MI);
     }
 
+    SmallVector<ReplayCandidate, 8> Candidates;
+    findCandidates(MBB, Candidates);
+
+    if (Candidates.empty())
+      continue;
+
+    // Compute HardwareLength for each candidate: count ALL Tensix
+    // instructions (SFPU + inline asm like INCRWC) in the range from the
+    // first to last SFPU instruction.  The hardware replay buffer records
+    // all Tensix instructions, not just SFPU ones.
+    //
+    // Also verify that the interleaved non-SFPU instructions match between
+    // original and each clone.  Reject candidates/clones that don't match.
+    for (ReplayCandidate &Cand : Candidates) {
+      if (Cand.StartIdx + Cand.Length > SFPUInstrs.size()) {
+        Cand.Savings = 0;
+        continue;
+      }
+
+      MachineInstr *OrigFirst = SFPUInstrs[Cand.StartIdx];
+      MachineInstr *OrigLast = SFPUInstrs[Cand.StartIdx + Cand.Length - 1];
+      unsigned HWLen = countTensixInRange(OrigFirst, OrigLast);
+
+      if (HWLen == 0 || HWLen > ReplayBufferSize) {
+        // RISC-V instruction in range or too long — can't replay
+        Cand.Savings = 0;
+        continue;
+      }
+      Cand.HardwareLength = HWLen;
+
+      // Verify each clone: interleaved instructions must match, and the
+      // clone range must also be pure Tensix.
+      SmallVector<unsigned, 8> ValidClones;
+      for (unsigned CloneStart : Cand.CloneStarts) {
+        if (CloneStart + Cand.Length > SFPUInstrs.size())
+          continue;
+        MachineInstr *CloneFirst = SFPUInstrs[CloneStart];
+        MachineInstr *CloneLast = SFPUInstrs[CloneStart + Cand.Length - 1];
+
+        unsigned CloneHWLen = countTensixInRange(CloneFirst, CloneLast);
+        if (CloneHWLen != HWLen)
+          continue;  // Different interleaving — can't replay
+
+        if (!fullRangeMatches(OrigFirst, OrigLast, CloneFirst, CloneLast))
+          continue;  // Interleaved instructions differ
+
+        ValidClones.push_back(CloneStart);
+      }
+      Cand.CloneStarts = std::move(ValidClones);
+      Cand.computeSavings();
+    }
+
+    SmallVector<ReplayCandidate *, 4> Selected;
+    allocateBuffer(Candidates, Selected);
+
+    if (Selected.empty())
+      continue;
+
+    // Emit REPLAY instructions for selected candidates.
+    //
+    // Protocol:
+    // 1. First occurrence: insert REPLAY(slot, hwlen, ewl=1, load=1)
+    //    Records the next hwlen Tensix instructions AND executes them.
+    //    ewl=1 (execute_while_load) is essential — without it, the
+    //    instructions are recorded but not executed, skipping the first
+    //    occurrence entirely.
+    // 2. Each clone: replace ALL instructions (SFPU + non-SFPU Tensix)
+    //    with a single REPLAY(slot, hwlen, 0, 0) instruction.
     unsigned NextSlot = ReplayBufferOffset;
     for (ReplayCandidate *Cand : Selected) {
       unsigned Slot = NextSlot;
-      NextSlot += Cand->Length;
+      NextSlot += Cand->HardwareLength;
 
       LLVM_DEBUG(dbgs() << "REPLAY: slot " << Slot << ", "
-                        << Cand->Length << " insns, "
+                        << Cand->HardwareLength << " hw insns ("
+                        << Cand->Length << " SFPU), "
                         << Cand->numClones() << " clones, saves "
                         << Cand->Savings << " insns\n");
 
-      // Mark original sequence: insert REPLAY(slot, len, 0, 1) before it
-      // load_mode=1 means "record the following instructions into the buffer"
-      if (Cand->StartIdx < SFPUInstrs.size() &&
-          SFPUInstrs[Cand->StartIdx] &&
-          SFPUInstrs[Cand->StartIdx]->getParent() == &MBB) {
-        MachineInstr *FirstInOriginal = SFPUInstrs[Cand->StartIdx];
-        DebugLoc DL = FirstInOriginal->getDebugLoc();
+      // Mark original: insert REPLAY(record) before first instruction.
+      MachineInstr *FirstInOriginal = SFPUInstrs[Cand->StartIdx];
+      if (!FirstInOriginal || FirstInOriginal->getParent() != &MBB)
+        continue;
+      DebugLoc DL = FirstInOriginal->getDebugLoc();
 
-        // TTREPLAY encoding: (slot << 14) | (len << 4) | (ewl << 1) | load_mode
-        // Emit REPLAY in "load" mode: record following instructions.
-        BuildMI(MBB, *FirstInOriginal, DL, TII->get(RISCV::TTREPLAY))
-            .addImm(Slot)            // start_idx
-            .addImm(Cand->Length)    // len
-            .addImm(0)               // exec_while_load = 0
-            .addImm(1);              // load_mode = 1 (record)
-      }
+      BuildMI(MBB, *FirstInOriginal, DL, TII->get(RISCV::TTREPLAY))
+          .addImm(Slot)
+          .addImm(Cand->HardwareLength)
+          .addImm(1)   // exec_while_load = 1 (record AND execute)
+          .addImm(1);  // load_mode = 1 (record)
 
-      // Replace each clone with REPLAY(slot, len, 0, 0) = "execute" mode
+      // Replace each clone: delete ALL instructions from the first to last
+      // SFPU instruction in the clone (including interleaved non-SFPU),
+      // and insert a single REPLAY(execute) instruction.
       for (unsigned CloneStart : Cand->CloneStarts) {
         if (CloneStart + Cand->Length > SFPUInstrs.size())
           continue;
 
-        MachineInstr *FirstInClone = SFPUInstrs[CloneStart];
-        // Skip if this instruction was already erased by a previous candidate.
-        if (!FirstInClone || FirstInClone->getParent() != &MBB)
+        MachineInstr *CloneFirst = SFPUInstrs[CloneStart];
+        MachineInstr *CloneLast = SFPUInstrs[CloneStart + Cand->Length - 1];
+        if (!CloneFirst || CloneFirst->getParent() != &MBB)
           continue;
 
-        DebugLoc DL = FirstInClone->getDebugLoc();
+        DL = CloneFirst->getDebugLoc();
 
-        // Insert REPLAY in "execute" mode before the clone, then delete it.
-        // Replay uses (exec_while_load=0, load_mode=0) per lltt::replay().
-        BuildMI(MBB, *FirstInClone, DL, TII->get(RISCV::TTREPLAY))
-            .addImm(Slot)            // start_idx
-            .addImm(Cand->Length)    // len
-            .addImm(0)               // exec_while_load = 0
-            .addImm(0);              // load_mode = 0 (replay from buffer)
+        BuildMI(MBB, *CloneFirst, DL, TII->get(RISCV::TTREPLAY))
+            .addImm(Slot)
+            .addImm(Cand->HardwareLength)
+            .addImm(0)
+            .addImm(0);  // load_mode = 0 (replay)
 
-        // Delete the clone instructions and null out their SFPUInstrs entries
-        for (unsigned J = 0; J < Cand->Length && CloneStart + J < SFPUInstrs.size(); ++J) {
-          MachineInstr *CloneInstr = SFPUInstrs[CloneStart + J];
-          if (CloneInstr && CloneInstr->getParent() == &MBB) {
-            CloneInstr->eraseFromParent();
-            SFPUInstrs[CloneStart + J] = nullptr;
+        // Erase ALL instructions from CloneFirst through CloneLast.
+        // This includes SFPU instructions AND any interleaved non-SFPU
+        // Tensix instructions (like INCRWC), since the replay buffer
+        // replays ALL of them.
+        auto It = CloneFirst->getIterator();
+        auto End = std::next(CloneLast->getIterator());
+        while (It != End) {
+          MachineInstr &MI = *It++;
+          // Null out SFPUInstrs entries for erased SFPU instructions
+          if (MI.getDesc().TSFlags & RISCVII::IsXttSFPUMask) {
+            for (unsigned J = CloneStart;
+                 J < CloneStart + Cand->Length && J < SFPUInstrs.size(); ++J) {
+              if (SFPUInstrs[J] == &MI) {
+                SFPUInstrs[J] = nullptr;
+                break;
+              }
+            }
           }
+          MI.eraseFromParent();
         }
 
         Changed = true;
-        LLVM_DEBUG(dbgs() << "  Replaced clone at idx " << CloneStart
-                          << " with REPLAY execute\n");
+        LLVM_DEBUG(dbgs() << "  Replaced clone at SFPU idx " << CloneStart
+                          << " (" << Cand->HardwareLength
+                          << " instructions) with REPLAY execute\n");
       }
     }
   }
