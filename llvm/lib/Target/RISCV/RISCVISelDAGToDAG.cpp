@@ -2268,22 +2268,60 @@ void RISCVDAGToDAGISel::Select(SDNode *Node) {
       return;
     }
 
-    // sfpselect2: extract lane from 2-result instruction (SFPSWAP)
-    // In practice, the src value was produced by sfpswap which wrote
-    // both its dest and src_c registers. select2(src, 0) returns
-    // the dest, select2(src, 1) returns src_c. Since we can't track
-    // the second output through SSA, we emit SFPMOV as identity
-    // (the register allocator will handle the actual register assignment).
-    case Intrinsic::riscv_tt_sfpselect2:
+    // sfpselect2: extract result from SFPSWAP.
+    // idx=0: return the swap's dest result (the return value of sfpswap)
+    // idx=1: return the swap's src_c value BEFORE the swap.
+    //   We trace back through the DAG to find the sfpswap intrinsic node
+    //   and extract its second operand (src_c input). This is the value
+    //   that the hardware wrote to the src_c register during the swap.
+    case Intrinsic::riscv_tt_sfpselect2: {
+      SDValue Chain = Node->getOperand(0);
+      SDValue Src = Node->getOperand(2);
+      unsigned Idx = cast<ConstantSDNode>(Node->getOperand(3))->getZExtValue();
+
+      if (Idx == 1) {
+        // Trace back: Src is the result of sfpswap. The sfpswap intrinsic
+        // call has operands (chain, intrin_id, a, b, mod). We need 'b'.
+        SDNode *SwapNode = Src.getNode();
+        // Walk through any copies/casts to find the intrinsic call
+        while (SwapNode && SwapNode->getOpcode() != ISD::INTRINSIC_W_CHAIN &&
+               SwapNode->getNumOperands() > 0) {
+          SwapNode = SwapNode->getOperand(0).getNode();
+        }
+        if (SwapNode && SwapNode->getOpcode() == ISD::INTRINSIC_W_CHAIN) {
+          unsigned SwapIntNo = SwapNode->getConstantOperandVal(1);
+          if (SwapIntNo == Intrinsic::riscv_tt_sfpswap) {
+            // Found the sfpswap! Get operand 3 = src_c (b)
+            SDValue SrcC = SwapNode->getOperand(3);
+            // Emit SFPMOV to create a copy of src_c
+            SDValue Imm = CurDAG->getTargetConstant(0, DL, MVT::i32);
+            SDValue Mod1 = CurDAG->getTargetConstant(0, DL, MVT::i32);
+            if (auto *C = dyn_cast<ConstantSDNode>(SrcC))
+              SrcC = CurDAG->getRegister(RISCV::L0 + C->getZExtValue(), MVT::i32);
+            MachineSDNode *Res = CurDAG->getMachineNode(
+                RISCV::SFPMOV, DL, MVT::i32, MVT::Other, {Imm, SrcC, Mod1, Chain});
+            ReplaceNode(Node, Res);
+            return;
+          }
+        }
+      }
+      // idx=0 or fallback: identity copy of the swap result
+      if (auto *C = dyn_cast<ConstantSDNode>(Src))
+        Src = CurDAG->getRegister(RISCV::L0 + C->getZExtValue(), MVT::i32);
+      SDValue Imm = CurDAG->getTargetConstant(0, DL, MVT::i32);
+      SDValue Mod1 = CurDAG->getTargetConstant(0, DL, MVT::i32);
+      MachineSDNode *Res = CurDAG->getMachineNode(
+          RISCV::SFPMOV, DL, MVT::i32, MVT::Other, {Imm, Src, Mod1, Chain});
+      ReplaceNode(Node, Res);
+      return;
+    }
+
     // sfpselect4: extract lane from 4-result instruction (SFPTRANSP)
     case Intrinsic::riscv_tt_sfpselect4: {
       SDValue Chain = Node->getOperand(0);
       SDValue Src = Node->getOperand(2);
       if (auto *C = dyn_cast<ConstantSDNode>(Src))
         Src = CurDAG->getRegister(RISCV::L0 + C->getZExtValue(), MVT::i32);
-      // For now, emit SFPMOV (identity) — the register allocator ensures
-      // the preceding swap/transp result is in the right register.
-      // A future optimization can track multi-output results more precisely.
       SDValue Imm = CurDAG->getTargetConstant(0, DL, MVT::i32);
       SDValue Mod1 = CurDAG->getTargetConstant(0, DL, MVT::i32);
       MachineSDNode *Res = CurDAG->getMachineNode(
