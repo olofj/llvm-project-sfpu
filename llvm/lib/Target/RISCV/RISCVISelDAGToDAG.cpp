@@ -2123,7 +2123,7 @@ void RISCVDAGToDAGISel::Select(SDNode *Node) {
       MachineSDNode *Lut = CurDAG->getMachineNode(
           RISCV::SFPLUTFP32, DL, MVT::i32, MVT::Other, {Src, Mod1, Chain});
       SDValue LutChain = SDValue(Lut, 1);
-      // Copy L7 to SFPURegs virtual register via SFPMOV.
+      // Copy L7 (implicit-def from SFPLUTFP32) to SFPURegs via SFPMOV.
       SDValue L7Src = CurDAG->getRegister(RISCV::L7, MVT::i32);
       SDValue Zero = CurDAG->getTargetConstant(0, DL, MVT::i32);
       MachineSDNode *Mov = CurDAG->getMachineNode(

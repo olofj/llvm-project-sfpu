@@ -360,11 +360,10 @@ class SFPULutFP32<bits<8> opcode, string opcodestr>
                 "$lreg_dest, $lreg_c, $mod1"> {
   let imm12 = 0;
   // Hardware writes result to L7 (lreg_dest=7 hardcoded in encoding).
-  // The explicit output provides a data dependency to consumers (SFPMOV).
-  // Without it, the scheduler may reorder SFPMOV before SFPLUTFP32.
-  // The RA assigns the dead output to L3 or L7; when L3 is chosen,
-  // half_in is clobbered in some iterations. The combine pass +
-  // SFPMUL tie minimize this impact.
+  // Output class is SFPUL7Reg = {L7} which forces the RA to assign L7,
+  // preventing clobber of L3 (half_in). The combine pass makes the
+  // output truly dead (zero uses — SFPMOV reads physical L7 instead),
+  // so SFPUL7Reg doesn't bottleneck at -O3 with unrolling.
   let lreg_dest = 7;
   let Defs = [L0, L1, L7];
 }
