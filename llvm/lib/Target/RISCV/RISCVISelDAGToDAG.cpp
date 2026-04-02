@@ -2115,12 +2115,9 @@ void RISCVDAGToDAGISel::Select(SDNode *Node) {
       // The output register class is SFPUL7Reg = {L7}, so the RA assigns
       // the output to L7. This prevents the RA from incorrectly thinking
       // another register (like L3) is clobbered, avoiding unnecessary spills.
-      // Emit SFPLUTFP32 (output in SFPUL7Reg = {L7}), then SFPMOV from L7
-      // to a SFPURegs virtual register. This avoids SFPUL7Reg bottleneck:
-      // at -O3 with loop unrolling, multiple LUT outputs in SFPUL7Reg (1 reg)
-      // cause "ran out of registers." The SFPMOV copies to SFPURegs (8 regs),
-      // giving the RA flexibility. The SFPMOV itself is typically coalesced
-      // away or is a single-cycle instruction.
+      // SFPLUTFP32 with tied constraint (output=input, same register).
+      // Hardware writes result to L7. Read L7 via SFPMOV to SFPURegs
+      // virtual register for consumers that may need _LV variants.
       SDValue Chain = Node->getOperand(0);
       SDValue Src = Node->getOperand(2);
       SDValue Mod1 = SFPU_IMM(Node->getOperand(3));
@@ -2129,7 +2126,7 @@ void RISCVDAGToDAGISel::Select(SDNode *Node) {
       MachineSDNode *Lut = CurDAG->getMachineNode(
           RISCV::SFPLUTFP32, DL, MVT::i32, MVT::Other, {Src, Mod1, Chain});
       SDValue LutChain = SDValue(Lut, 1);
-      // Copy L7 result to SFPURegs via SFPMOV (avoids SFPUL7Reg bottleneck).
+      // Copy L7 to SFPURegs via SFPMOV for _LV compatibility.
       SDValue L7Src = CurDAG->getRegister(RISCV::L7, MVT::i32);
       SDValue Zero = CurDAG->getTargetConstant(0, DL, MVT::i32);
       MachineSDNode *Mov = CurDAG->getMachineNode(
