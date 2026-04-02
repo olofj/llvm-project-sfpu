@@ -503,17 +503,11 @@ bool RISCVRegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
   Register FrameReg;
   StackOffset Offset =
       getFrameLowering(MF)->getFrameIndexReference(MF, FrameIndex, FrameReg);
-  // SFPU spill: SFPSTORE/SFPLOAD with frame index as addr operand.
-  // Convert FI to a DEST row address (16 + FI*2) and replace the operand.
+  // SFPU spill: convert FI to DEST address for SFPSTORE/SFPLOAD.
   unsigned Opc = MI.getOpcode();
   if (Opc == RISCV::SFPSTORE_BH || Opc == RISCV::SFPSTORE_WH ||
       Opc == RISCV::SFPLOAD_BH || Opc == RISCV::SFPLOAD_WH) {
-    // Start spill area at DEST row 128 — far enough from tile data
-    // (4 faces × 16 rows × 2 half-rows = 128 rows max, but typically
-    // uses ~64). RWC-relative addressing means the effective address
-    // is base + RWC + SpillAddr, so SpillAddr must be beyond the
-    // largest face offset to avoid collisions.
-    unsigned SpillAddr = 256 + (unsigned)FrameIndex * 2;
+    unsigned SpillAddr = 128 + (unsigned)FrameIndex * 2;
     if (SpillAddr > 8191) SpillAddr = 8191;
     MI.getOperand(FIOperandNum).ChangeToImmediate(SpillAddr);
     return false;

@@ -554,7 +554,10 @@ void RISCVPassConfig::addMachineSSAOptimization() {
 
   // Tenstorrent SFPU pre-RA passes
   addPass(createRISCVXttSFPUCombinePass());
-  addPass(createRISCVXttSFPUEstrinPass());     // Horner→Estrin polynomial restructuring
+  // Estrin pass disabled: restructuring Horner tail into x*x multiplication
+  // changes FMA rounding behavior, degrading PCC from 0.99999 to 0.98 for
+  // gelu, exp, and sigmoid on BH silicon. Pure Horner matches GCC output.
+  // addPass(createRISCVXttSFPUEstrinPass());
   addPass(createRISCVXttSFPUSynthPass());
   addPass(createRISCVXttSFPULivenessPass());
 

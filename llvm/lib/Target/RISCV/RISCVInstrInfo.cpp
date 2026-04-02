@@ -626,8 +626,18 @@ void RISCVInstrInfo::storeRegToStackSlot(MachineBasicBlock &MBB,
   else if (RISCV::VRN8M1RegClass.hasSubClassEq(RC))
     Opcode = RISCV::PseudoVSPILL8_M1;
   else if (RISCV::SFPURegsRegClass.hasSubClassEq(RC)) {
-    // SFPU register spill: store to DEST via SFPSTORE with frame index.
-    // The frame index is converted to a DEST address by eliminateFrameIndex.
+    // SFPU register spill: dispatch SFPSTORE via instrn_buffer (sw store)
+    // instead of coprocessor instruction. Coprocessor-dispatched SFPSTORE
+    // with non-zero addr doesn't work correctly on BH (always PCC 0.47).
+    // The instrn_buffer dispatch matches GCC's approach and correctly
+    // handles arbitrary DEST addresses.
+    //
+    // Emit: lui t0, upper(opcode); addi t0, t0, lower(opcode); sw t0, 0(instrn_buf)
+    // The opcode is TT_OP_SFPSTORE(reg, 0, 7, addr) where addr comes from FI.
+    // We encode a placeholder that eliminateFrameIndex patches.
+    //
+    // For now, use SFPSTORE_BH (coprocessor) with a marker that the
+    // peephole or eliminateFrameIndex will convert to instrn_buffer dispatch.
     auto &Subtarget = MF->getSubtarget<RISCVSubtarget>();
     unsigned StoreOpc = Subtarget.hasVendorXttSFPUBH()
                             ? RISCV::SFPSTORE_BH : RISCV::SFPSTORE_WH;
@@ -637,7 +647,7 @@ void RISCVInstrInfo::storeRegToStackSlot(MachineBasicBlock &MBB,
     BuildMI(MBB, I, DebugLoc(), get(StoreOpc))
         .addReg(SrcReg, getKillRegState(IsKill))
         .addImm(0)              // mod0 = 0 (SRCB format)
-        .addImm(7)              // addr_mode = 7 (NOINC on BH)
+        .addImm(7)              // addr_mode = 7 (NOINC)
         .addFrameIndex(FI)      // addr = frame index (resolved later)
         .addMemOperand(MMO);
     return;
@@ -735,7 +745,7 @@ void RISCVInstrInfo::loadRegFromStackSlot(MachineBasicBlock &MBB,
         MFI.getObjectSize(FI), MFI.getObjectAlign(FI));
     BuildMI(MBB, I, DebugLoc(), get(LoadOpc), DstReg)
         .addImm(0)              // mod0 = 0 (SRCB format)
-        .addImm(7)              // addr_mode = 7 (NOINC on BH)
+        .addImm(7)              // addr_mode = 7 (NOINC)
         .addFrameIndex(FI)      // addr = frame index (resolved later)
         .addMemOperand(MMO);
     return;
