@@ -360,11 +360,10 @@ class SFPULutFP32<bits<8> opcode, string opcodestr>
                 "$lreg_dest, $lreg_c, $mod1"> {
   let imm12 = 0;
   // Hardware writes result to L7 (encoded via lreg_dest=7).
-  // Tie output to input so they share the same register — the hardware
-  // doesn't actually write to lreg_dest (it writes to L7 via hardcoded
-  // encoding), so the input value is preserved in the shared register.
-  // This avoids consuming an extra allocatable register for the dead output.
-  let Constraints = "$lreg_dest = $lreg_c";
+  // No tie constraint: the dead output goes to whatever the RA assigns.
+  // The combine pass redirects the LUT input from the original value to
+  // the SFPMUL output, so the original value dies before SFPLUTFP32.
+  // The LUT result is read from L7 via SFPMOV.
   let lreg_dest = 7;
   let Defs = [L0, L1, L7];
 }
@@ -487,6 +486,12 @@ def SFPMAD : SFPU3Op<0x84, "sfpmad">;
 
 def SFPADD : SFPU3Op<0x85, "sfpadd">;
 
+// SFPMUL: tie dest to src_a. The hardware allows any dest register, but
+// tying ensures the multiply overwrites its first input — matching GCC.
+// Critical for gelu: after SFPMUL, the register holds half_in. SFPLUTFP32
+// reads from the same register (LUT of half_in). Without the tie, both
+// `in` and `half_in` are live simultaneously, causing a spill.
+let Constraints = "$lreg_dest = $lreg_src_a" in
 def SFPMUL : SFPU3Op<0x86, "sfpmul">;
 
 //--- CC Stack / Predication Instructions (simple unit, 1 cycle) ---

@@ -63,6 +63,7 @@ private:
   bool tryCombineMulAdd(MachineBasicBlock &MBB);
   bool tryCombineLoadiIntoImm(MachineBasicBlock &MBB);
   bool tryCombineNegatedOperands(MachineBasicBlock &MBB);
+  bool tryCombineLutInput(MachineBasicBlock &MBB);
 
   /// Check if a register has exactly one use in the function.
   bool hasOneUse(Register Reg, const MachineRegisterInfo &MRI) const;
@@ -345,6 +346,53 @@ bool RISCVXttSFPUCombine::tryCombineNegatedOperands(MachineBasicBlock &MBB) {
   return Changed;
 }
 
+/// Redirect SFPLUTFP32 to read from SFPMUL output instead of original input.
+/// Pattern: %1 = SFPMUL %in, C, L9 → half_in
+///          %2 = SFPLUTFP32 %in, mod → LUT(in)
+/// Transform: %2 = SFPLUTFP32 %1, mod → LUT(half_in)
+/// This eliminates simultaneous liveness of %in and %1, matching GCC's
+/// gelu register usage (LUT applied to half_in, not original input).
+bool RISCVXttSFPUCombine::tryCombineLutInput(MachineBasicBlock &MBB) {
+  MachineRegisterInfo &MRI = MBB.getParent()->getRegInfo();
+  bool Changed = false;
+
+  for (MachineInstr &LutMI : MBB) {
+    if (LutMI.getOpcode() != RISCV::SFPLUTFP32)
+      continue;
+
+    // SFPLUTFP32 operands: (outs dest), (ins lreg_c, mod1)
+    // With tied constraint, operand 0 = dest (tied to lreg_c), operand 1 = lreg_c
+    Register LutInput = LutMI.getOperand(1).getReg();
+    if (!LutInput.isVirtual())
+      continue;
+
+    // Find an SFPMUL that uses the same input as src_a
+    MachineInstr *MulMI = nullptr;
+    for (auto &UseMI : MRI.use_nodbg_instructions(LutInput)) {
+      if (UseMI.getOpcode() == RISCV::SFPMUL &&
+          UseMI.getOperand(1).getReg() == LutInput) {
+        MulMI = &UseMI;
+        break;
+      }
+    }
+    if (!MulMI) continue;
+
+    // Verify SFPMUL output is a virtual register
+    Register MulOut = MulMI->getOperand(0).getReg();
+    if (!MulOut.isVirtual()) continue;
+
+    // Redirect SFPLUTFP32 input from %in to %mul_out.
+    // Only change lreg_c (operand 1). The tied output (operand 0) keeps
+    // its own vreg — the tie constraint tells the RA to assign the same
+    // physical register. This maintains SSA (one def per vreg).
+    LutMI.getOperand(1).setReg(MulOut);
+
+    LLVM_DEBUG(dbgs() << "  Combined LUT input: " << LutMI);
+    Changed = true;
+  }
+  return Changed;
+}
+
 bool RISCVXttSFPUCombine::runOnMachineFunction(MachineFunction &MF) {
   STI = &MF.getSubtarget<RISCVSubtarget>();
 
@@ -360,6 +408,9 @@ bool RISCVXttSFPUCombine::runOnMachineFunction(MachineFunction &MF) {
   for (MachineBasicBlock &MBB : MF) {
     // Negated operand folding (BH only, must run before MUL+ADD→MAD)
     Changed |= tryCombineNegatedOperands(MBB);
+
+    // Redirect LUT input to MUL output (gelu pattern, before MUL+ADD→MAD)
+    Changed |= tryCombineLutInput(MBB);
 
     // MUL+ADD → MAD (most impactful optimization)
     Changed |= tryCombineMulAdd(MBB);
