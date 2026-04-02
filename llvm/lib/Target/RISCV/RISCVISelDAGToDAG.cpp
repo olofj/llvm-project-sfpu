@@ -2113,7 +2113,8 @@ void RISCVDAGToDAGISel::Select(SDNode *Node) {
     case Intrinsic::riscv_tt_sfplutfp32: {
       // SFPLUTFP32 + SFPMOV from L7. The combine pass redirects the LUT
       // input from `in` to `half_in` (SFPMUL output). With the SFPMUL tie
-      // constraint, `in` dies before SFPLUTFP32, reducing live values to 2.
+      // constraint, `in` dies before SFPLUTFP32, reducing peak liveness.
+      // The explicit output provides data dependency to prevent reordering.
       SDValue Chain = Node->getOperand(0);
       SDValue Src = Node->getOperand(2);
       SDValue Mod1 = SFPU_IMM(Node->getOperand(3));
@@ -2122,7 +2123,7 @@ void RISCVDAGToDAGISel::Select(SDNode *Node) {
       MachineSDNode *Lut = CurDAG->getMachineNode(
           RISCV::SFPLUTFP32, DL, MVT::i32, MVT::Other, {Src, Mod1, Chain});
       SDValue LutChain = SDValue(Lut, 1);
-      // Copy L7 to SFPURegs virtual register.
+      // Copy L7 to SFPURegs virtual register via SFPMOV.
       SDValue L7Src = CurDAG->getRegister(RISCV::L7, MVT::i32);
       SDValue Zero = CurDAG->getTargetConstant(0, DL, MVT::i32);
       MachineSDNode *Mov = CurDAG->getMachineNode(

@@ -360,8 +360,8 @@ bool RISCVXttSFPUCombine::tryCombineLutInput(MachineBasicBlock &MBB) {
     if (LutMI.getOpcode() != RISCV::SFPLUTFP32)
       continue;
 
-    // SFPLUTFP32 operands: (outs dest), (ins lreg_c, mod1)
-    // With tied constraint, operand 0 = dest (tied to lreg_c), operand 1 = lreg_c
+    // SFPLUTFP32 operands: (outs lreg_dest), (ins lreg_c, mod1)
+    // Operand 0 = dest (dead output), operand 1 = lreg_c, operand 2 = mod1.
     Register LutInput = LutMI.getOperand(1).getReg();
     if (!LutInput.isVirtual())
       continue;
@@ -369,8 +369,8 @@ bool RISCVXttSFPUCombine::tryCombineLutInput(MachineBasicBlock &MBB) {
     // Find an SFPMUL that uses the same input as src_a
     MachineInstr *MulMI = nullptr;
     for (auto &UseMI : MRI.use_nodbg_instructions(LutInput)) {
-      if (UseMI.getOpcode() == RISCV::SFPMUL &&
-          UseMI.getOperand(1).getReg() == LutInput) {
+      unsigned MulOpc = UseMI.getOpcode();
+      if (MulOpc == RISCV::SFPMUL && UseMI.getOperand(1).getReg() == LutInput) {
         MulMI = &UseMI;
         break;
       }
@@ -381,10 +381,7 @@ bool RISCVXttSFPUCombine::tryCombineLutInput(MachineBasicBlock &MBB) {
     Register MulOut = MulMI->getOperand(0).getReg();
     if (!MulOut.isVirtual()) continue;
 
-    // Redirect SFPLUTFP32 input from %in to %mul_out.
-    // Only change lreg_c (operand 1). The tied output (operand 0) keeps
-    // its own vreg — the tie constraint tells the RA to assign the same
-    // physical register. This maintains SSA (one def per vreg).
+    // Redirect SFPLUTFP32 input from %in to %mul_out (operand 1 = lreg_c).
     LutMI.getOperand(1).setReg(MulOut);
 
     LLVM_DEBUG(dbgs() << "  Combined LUT input: " << LutMI);

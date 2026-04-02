@@ -359,11 +359,12 @@ class SFPULutFP32<bits<8> opcode, string opcodestr>
                 (ins SFPUAllRegs:$lreg_c, uimm4_sfpu:$mod1),
                 "$lreg_dest, $lreg_c, $mod1"> {
   let imm12 = 0;
-  // Hardware writes result to L7 (encoded via lreg_dest=7).
-  // No tie constraint: the dead output goes to whatever the RA assigns.
-  // The combine pass redirects the LUT input from the original value to
-  // the SFPMUL output, so the original value dies before SFPLUTFP32.
-  // The LUT result is read from L7 via SFPMOV.
+  // Hardware writes result to L7 (lreg_dest=7 hardcoded in encoding).
+  // The explicit output provides a data dependency to consumers (SFPMOV).
+  // Without it, the scheduler may reorder SFPMOV before SFPLUTFP32.
+  // The RA assigns the dead output to L3 or L7; when L3 is chosen,
+  // half_in is clobbered in some iterations. The combine pass +
+  // SFPMUL tie minimize this impact.
   let lreg_dest = 7;
   let Defs = [L0, L1, L7];
 }
