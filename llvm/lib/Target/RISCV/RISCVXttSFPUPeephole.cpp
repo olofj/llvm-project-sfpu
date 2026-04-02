@@ -324,20 +324,22 @@ bool RISCVXttSFPUPeephole::tryEliminateLutSpill(MachineBasicBlock &MBB) {
         .addReg(RISCV::L7)
         .addImm(0);
 
-    // Set MBBI to after the new SFPADD (skip over I7 which is SFPMOV for store)
-    MBBI = std::next(I6);
-
-    // Also erase I7 (SFPMOV that copied result — no longer needed since
-    // SFPADD now writes directly to SpillReg which goes to SFPSTORE)
-    if (I7 != MBB.end() && (I7->getOpcode() == RISCV::SFPMOV || I7->getOpcode() == RISCV::SFPMOV_LV))
+    // Compute safe iterator BEFORE any erasure. The new SFPADD was inserted
+    // before I6. After erasing I4-I7, we want to continue from the SFPSTORE
+    // (data store) which follows I7 (or the new SFPADD if I7 was the last).
+    auto SafeIt = I7;
+    if (I7 != MBB.end() && (I7->getOpcode() == RISCV::SFPMOV || I7->getOpcode() == RISCV::SFPMOV_LV)) {
+      SafeIt = std::next(I7);
       I7->eraseFromParent();
+    }
+    MBBI = SafeIt;
 
-    // Erase in reverse order to avoid iterator invalidation
-    I6->eraseFromParent();  // original SFPADD
-    I5->eraseFromParent();  // reload SFPLOAD
-    I4->eraseFromParent();  // SFPMOV from L7
-    I2->eraseFromParent();  // redundant reload
-    I1->eraseFromParent();  // spill SFPSTORE
+    // Erase in reverse order
+    I6->eraseFromParent();
+    I5->eraseFromParent();
+    I4->eraseFromParent();
+    I2->eraseFromParent();
+    I1->eraseFromParent();
 
     Changed = true;
   }
