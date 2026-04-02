@@ -355,14 +355,16 @@ class SFPUStochRnd<bits<8> opcode, string opcodestr>
 //---
 class SFPULutFP32<bits<8> opcode, string opcodestr>
     : SFPUUnary<opcode, opcodestr,
-                (outs SFPUL7Reg:$lreg_dest),
+                (outs SFPURegs:$lreg_dest),
                 (ins SFPUAllRegs:$lreg_c, uimm4_sfpu:$mod1),
                 "$lreg_dest, $lreg_c, $mod1"> {
   let imm12 = 0;
-  // Hardware writes result to the register specified by lreg_dest.
-  // GCC always encodes lreg_dest=L7. Force encoding to L7 regardless
-  // of what the RA assigns to $lreg_dest (the RA-assigned register is
-  // used for liveness tracking only; the encoding always writes L7).
+  // Hardware writes result to L7 (encoded via lreg_dest=7).
+  // Tie output to input so they share the same register — the hardware
+  // doesn't actually write to lreg_dest (it writes to L7 via hardcoded
+  // encoding), so the input value is preserved in the shared register.
+  // This avoids consuming an extra allocatable register for the dead output.
+  let Constraints = "$lreg_dest = $lreg_c";
   let lreg_dest = 7;
   let Defs = [L0, L1, L7];
 }
