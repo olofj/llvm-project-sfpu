@@ -384,12 +384,6 @@ bool RISCVXttSFPUCombine::tryCombineLutInput(MachineBasicBlock &MBB) {
     // Redirect SFPLUTFP32 input from %in to %mul_out (operand 1 = lreg_c).
     LutMI.getOperand(1).setReg(MulOut);
 
-    // Mark the dead output as dead. The hardware writes to L7 only
-    // (lreg_dest=7 hardcoded), NOT to whatever the RA assigns. Marking
-    // dead prevents the RA from spilling the previous value in the
-    // assigned register (it knows the def doesn't produce a useful value).
-    LutMI.getOperand(0).setIsDead(true);
-
     LLVM_DEBUG(dbgs() << "  Combined LUT input: " << LutMI);
     Changed = true;
   }
@@ -411,9 +405,6 @@ bool RISCVXttSFPUCombine::runOnMachineFunction(MachineFunction &MF) {
   for (MachineBasicBlock &MBB : MF) {
     // Negated operand folding (BH only, must run before MUL+ADD→MAD)
     Changed |= tryCombineNegatedOperands(MBB);
-
-    // Redirect LUT input to MUL output (gelu pattern, before MUL+ADD→MAD)
-    Changed |= tryCombineLutInput(MBB);
 
     // MUL+ADD → MAD (most impactful optimization)
     Changed |= tryCombineMulAdd(MBB);

@@ -355,17 +355,17 @@ class SFPUStochRnd<bits<8> opcode, string opcodestr>
 //---
 class SFPULutFP32<bits<8> opcode, string opcodestr>
     : SFPUUnary<opcode, opcodestr,
-                (outs SFPURegs:$lreg_dest),
+                (outs SFPUL7Reg:$lreg_dest),
                 (ins SFPUAllRegs:$lreg_c, uimm4_sfpu:$mod1),
                 "$lreg_dest, $lreg_c, $mod1"> {
   let imm12 = 0;
   // Hardware writes result to L7 (lreg_dest=7 hardcoded in encoding).
-  // Output class is SFPUL7Reg = {L7} which forces the RA to assign L7,
-  // preventing clobber of L3 (half_in). The combine pass makes the
-  // output truly dead (zero uses — SFPMOV reads physical L7 instead),
-  // so SFPUL7Reg doesn't bottleneck at -O3 with unrolling.
+  // SFPUL7Reg = {L7} forces RA to assign L7. With MUL+ADD→MAD folding,
+  // the L7 result is consumed immediately by SFPMAD, so the single-register
+  // class doesn't create pressure. L0,L1 are implicit defs (LUT coefficients).
+  // L7 is NOT in Defs — the (outs SFPUL7Reg) already declares L7 as defined.
   let lreg_dest = 7;
-  let Defs = [L0, L1, L7];
+  let Defs = [L0, L1];
 }
 
 //---
@@ -491,7 +491,6 @@ def SFPADD : SFPU3Op<0x85, "sfpadd">;
 // Critical for gelu: after SFPMUL, the register holds half_in. SFPLUTFP32
 // reads from the same register (LUT of half_in). Without the tie, both
 // `in` and `half_in` are live simultaneously, causing a spill.
-let Constraints = "$lreg_dest = $lreg_src_a" in
 def SFPMUL : SFPU3Op<0x86, "sfpmul">;
 
 //--- CC Stack / Predication Instructions (simple unit, 1 cycle) ---

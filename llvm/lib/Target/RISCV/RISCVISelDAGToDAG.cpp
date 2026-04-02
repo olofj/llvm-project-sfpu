@@ -2111,26 +2111,17 @@ void RISCVDAGToDAGISel::Select(SDNode *Node) {
 
     // SFPLUTFP32: (src_reg, mod1) — 2 args only
     case Intrinsic::riscv_tt_sfplutfp32: {
-      // SFPLUTFP32 + SFPMOV from L7. The combine pass redirects the LUT
-      // input from `in` to `half_in` (SFPMUL output). With the SFPMUL tie
-      // constraint, `in` dies before SFPLUTFP32, reducing peak liveness.
-      // The explicit output provides data dependency to prevent reordering.
+      // SFPLUTFP32 reads input from the data pipeline (last value through the
+      // MAD ALU), NOT from the lreg_c register field. GCC always encodes
+      // lreg_c=0; we do the same to match. The src_reg intrinsic argument
+      // is used only for LLVM's chain dependency (ordering), not the encoding.
       SDValue Chain = Node->getOperand(0);
-      SDValue Src = Node->getOperand(2);
       SDValue Mod1 = SFPU_IMM(Node->getOperand(3));
-      if (auto *C = dyn_cast<ConstantSDNode>(Src))
-        Src = CurDAG->getRegister(RISCV::L0 + C->getZExtValue(), MVT::i32);
+      // lreg_c = L0 (matches GCC encoding; hardware ignores this field)
+      SDValue Src = CurDAG->getRegister(RISCV::L0, MVT::i32);
       MachineSDNode *Lut = CurDAG->getMachineNode(
           RISCV::SFPLUTFP32, DL, MVT::i32, MVT::Other, {Src, Mod1, Chain});
-      SDValue LutChain = SDValue(Lut, 1);
-      SDValue L7Src = CurDAG->getRegister(RISCV::L7, MVT::i32);
-      SDValue Zero = CurDAG->getTargetConstant(0, DL, MVT::i32);
-      MachineSDNode *Mov = CurDAG->getMachineNode(
-          RISCV::SFPMOV, DL, MVT::i32, MVT::Other,
-          {Zero, L7Src, Zero, LutChain});
-      CurDAG->ReplaceAllUsesOfValueWith(SDValue(Node, 0), SDValue(Mov, 0));
-      CurDAG->ReplaceAllUsesOfValueWith(SDValue(Node, 1), SDValue(Mov, 1));
-      CurDAG->RemoveDeadNode(Node);
+      ReplaceNode(Node, Lut);
       return;
     }
 

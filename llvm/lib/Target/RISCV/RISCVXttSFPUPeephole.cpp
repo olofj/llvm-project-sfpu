@@ -87,6 +87,7 @@ private:
   bool tryFuseLZSetCC(MachineBasicBlock &MBB);
   bool tryFuseExExpSetCC(MachineBasicBlock &MBB);
   bool tryEliminateSelfMov(MachineBasicBlock &MBB);
+  bool tryEliminateMovStore(MachineBasicBlock &MBB);
   bool tryEliminateLutSpill(MachineBasicBlock &MBB);
 };
 
@@ -315,9 +316,8 @@ bool RISCVXttSFPUPeephole::tryEliminateLutSpill(MachineBasicBlock &MBB) {
     // I6: SFPADD using both LUT result and reloaded half_in
     if (I6->getOpcode() != RISCV::SFPADD) { ++MBBI; continue; }
 
-    // Pattern matched! Replace with: SFPLUTFP32 -> SFPADD(SpillReg, L10, SpillReg, L7)
-    // The SFPLUTFP32 stays (it has side effects). Remove spill store, both loads,
-    // SFPMOV, and replace SFPADD operands.
+    // Replace with SFPADD: half_in + LUT(half_in).
+    // This matches the C++ source: result = half_in + lut2_sign(...)
     BuildMI(MBB, I6, I6->getDebugLoc(), TII->get(RISCV::SFPADD), SpillReg)
         .addReg(RISCV::L10)
         .addReg(SpillReg)
@@ -347,6 +347,83 @@ bool RISCVXttSFPUPeephole::tryEliminateLutSpill(MachineBasicBlock &MBB) {
 }
 
 
+/// Eliminate SFPMOV + SFPSTORE: store from the MOV source directly.
+///
+/// Pattern:
+///   SFPMOV Ldst, Lsrc, 0, 0       ; Ldst = Lsrc (CC-predicated!)
+///   SFPSTORE Ldst, ...             ; store Ldst
+///
+/// All SFPU MOVs are hardware-predicated by the CC register. If a previous
+/// kernel left CC with some lanes masked, the MOV only updates active lanes.
+/// The SFPSTORE then reads a mix of old and new values, corrupting output.
+///
+/// Fix: bypass the MOV and store from Lsrc directly, which has the correct
+/// value for ALL lanes (not just CC-active ones).
+///
+/// Conditions:
+/// - SFPMOV dest is only used by the immediately following SFPSTORE
+/// - Lsrc is a valid store source (in SFPUStoreRegs)
+/// - mod1 is 0 (no transformation)
+bool RISCVXttSFPUPeephole::tryEliminateMovStore(MachineBasicBlock &MBB) {
+  bool Changed = false;
+
+  for (auto MBBI = MBB.begin(), MBBE = MBB.end(); MBBI != MBBE; ) {
+    MachineInstr &MovMI = *MBBI;
+
+    // Match SFPMOV (non-_lv) or SFPMOV_LV
+    unsigned Opc = MovMI.getOpcode();
+    if (Opc != RISCV::SFPMOV && Opc != RISCV::SFPMOV_LV) {
+      ++MBBI;
+      continue;
+    }
+
+    // Get the source register.
+    // SFPMOV format:    dest(0), imm12(1), lreg_c(2), mod1(3)
+    // SFPMOV_LV format: dest(0), live(1), imm12(2), lreg_c(3), mod1(4)
+    unsigned SrcIdx = (Opc == RISCV::SFPMOV_LV) ? 3 : 2;
+    unsigned ModIdx = (Opc == RISCV::SFPMOV_LV) ? 4 : 3;
+
+    if (!MovMI.getOperand(SrcIdx).isReg())  { ++MBBI; continue; }
+    if (!MovMI.getOperand(ModIdx).isImm() ||
+        MovMI.getOperand(ModIdx).getImm() != 0) { ++MBBI; continue; }
+
+    Register MovDst = MovMI.getOperand(0).getReg();
+    Register MovSrc = MovMI.getOperand(SrcIdx).getReg();
+
+    // Next instruction must be SFPSTORE using MovDst
+    auto NextMBBI = std::next(MBBI);
+    if (NextMBBI == MBBE) { ++MBBI; continue; }
+
+    MachineInstr &StoreMI = *NextMBBI;
+    unsigned StoreOpc = StoreMI.getOpcode();
+    if (StoreOpc != RISCV::SFPSTORE_BH && StoreOpc != RISCV::SFPSTORE_WH) {
+      ++MBBI;
+      continue;
+    }
+
+    // Store's source operand (operand 0) must be MovDst
+    if (!StoreMI.getOperand(0).isReg() ||
+        StoreMI.getOperand(0).getReg() != MovDst) {
+      ++MBBI;
+      continue;
+    }
+
+    // Replace store's source with MovSrc
+    StoreMI.getOperand(0).setReg(MovSrc);
+
+    // Erase the MOV
+    MBBI = NextMBBI;
+    ++MBBI;  // advance past store before erasing mov
+    MovMI.eraseFromParent();
+
+    Changed = true;
+    LLVM_DEBUG(dbgs() << "  Eliminated MOV before STORE, now storing from "
+                      << printReg(MovSrc) << "\n");
+  }
+
+  return Changed;
+}
+
 bool RISCVXttSFPUPeephole::runOnMachineFunction(MachineFunction &MF) {
   STI = &MF.getSubtarget<RISCVSubtarget>();
 
@@ -362,6 +439,7 @@ bool RISCVXttSFPUPeephole::runOnMachineFunction(MachineFunction &MF) {
     Changed |= tryFuseLZSetCC(MBB);
     Changed |= tryFuseExExpSetCC(MBB);
     Changed |= tryEliminateSelfMov(MBB);
+    Changed |= tryEliminateMovStore(MBB);
     Changed |= tryEliminateLutSpill(MBB);
   }
 

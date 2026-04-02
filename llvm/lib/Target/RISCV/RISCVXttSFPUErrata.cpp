@@ -260,11 +260,28 @@ bool RISCVXttSFPUErrata::handleE004_PipelineHazards(MachineFunction &MF) {
           }
         }
       } else {
-        // Dynamic delay on BH: scoreboard handles MOST cases, but E-004a
-        // errata cases need NOP. See ERRATA.md E-004a, tt-metal #14591.
-        if (NextMI != MBBE && RISCVXttSFPU::isSFPUInstr(*NextMI) &&
-            isBHScoreboardErrata(*NextMI, MI))
-          NeedNop = true;
+        // Dynamic delay on BH: The hardware scoreboard handles many RAW
+        // hazards, but GCC still inserts NOPs after 2-cycle instructions
+        // when the immediately following instruction reads the output.
+        // This matches GCC's rtl-rvtt-schedule.cc behavior.
+        if (NextMI != MBBE && RISCVXttSFPU::isSFPUInstr(*NextMI)) {
+          // Check for normal RAW dependency (same as WH logic)
+          for (const MachineOperand &Def : MI.defs()) {
+            if (!Def.isReg())
+              continue;
+            for (const MachineOperand &Use : NextMI->uses()) {
+              if (Use.isReg() && Use.getReg() == Def.getReg()) {
+                NeedNop = true;
+                break;
+              }
+            }
+            if (NeedNop)
+              break;
+          }
+          // Also check E-004a errata (scoreboard miss for specific combos)
+          if (!NeedNop && isBHScoreboardErrata(*NextMI, MI))
+            NeedNop = true;
+        }
       }
 
       if (NeedNop) {

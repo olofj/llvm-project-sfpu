@@ -533,8 +533,8 @@ void RISCVPassConfig::addPreEmitPass2() {
   addPass(createRISCVXttSFPUConstraintsPass());
   addPass(createRISCVXttSFPUPredElidePass());  // Elide trivial predication
   addPass(createRISCVXttSFPUPeepholePass());
+  addPass(createRISCVXttSFPUErrataPass());    // NOPs before REPLAY so body includes them
   addPass(createRISCVXttSFPUReplayPass());
-  addPass(createRISCVXttSFPUErrataPass());
 
   addPass(createRISCVExpandPseudoPass());
 
