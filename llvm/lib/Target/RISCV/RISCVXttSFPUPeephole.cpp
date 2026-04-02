@@ -32,6 +32,7 @@
 #include "RISCV.h"
 #include "RISCVInstrInfo.h"
 #include "RISCVSubtarget.h"
+#include "RISCVXttSFPUUtil.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 
@@ -86,6 +87,7 @@ private:
   bool tryFuseLZSetCC(MachineBasicBlock &MBB);
   bool tryFuseExExpSetCC(MachineBasicBlock &MBB);
   bool tryEliminateSelfMov(MachineBasicBlock &MBB);
+  bool tryEliminateLutSpill(MachineBasicBlock &MBB);
 };
 
 } // end anonymous namespace
@@ -250,6 +252,99 @@ bool RISCVXttSFPUPeephole::tryEliminateSelfMov(MachineBasicBlock &MBB) {
   return Changed;
 }
 
+/// Eliminate LUT spill pattern: restructure code around SFPLUTFP32 to remove
+/// redundant DEST spills. The RA spills half_in because it thinks the dead
+/// output clobbers L3, but hardware writes to L7 only (lreg_dest=7).
+///
+/// Before: SFPMUL L3 → SFPSTORE L3 → [SFPLOAD L3] → SFPLUTFP32 →
+///         SFPMOV L3,L7 → SFPLOAD L7,spill → SFPADD L7,L10,L7,L3
+///
+/// After:  SFPMUL L3 → SFPLUTFP32 → SFPADD L3,L10,L3,L7
+///
+/// L3 is preserved across SFPLUTFP32 (hardware writes L7 only). The SFPMOV
+/// is removed. The SFPADD reads L3 (half_in) and L7 (LUT result) directly.
+bool RISCVXttSFPUPeephole::tryEliminateLutSpill(MachineBasicBlock &MBB) {
+  bool Changed = false;
+
+  for (auto MBBI = MBB.begin(); MBBI != MBB.end(); ) {
+    // Match: SFPSTORE(spill) -> SFPLOAD(same) -> SFPLUTFP32 ->
+    //        SFPMOV(dest,L7) -> SFPLOAD(spill) -> SFPADD -> SFPMOV -> SFPSTORE(data)
+    MachineInstr &MI = *MBBI;
+    unsigned Opc = MI.getOpcode();
+    if (Opc != RISCV::SFPSTORE_BH && Opc != RISCV::SFPSTORE_WH) {
+      ++MBBI;
+      continue;
+    }
+
+    // Check if this is a spill store (addr >= 128)
+    unsigned AddrIdx = MI.getNumOperands() - 1;
+    if (!MI.getOperand(AddrIdx).isImm() || MI.getOperand(AddrIdx).getImm() < 128) {
+      ++MBBI;
+      continue;
+    }
+    int SpillAddr = MI.getOperand(AddrIdx).getImm();
+    Register SpillReg = MI.getOperand(0).getReg();
+
+    // Match the exact sequence of 8 instructions
+    auto I1 = MBBI; // SFPSTORE(spill)
+    auto I2 = std::next(I1); if (I2 == MBB.end()) { ++MBBI; continue; }
+    auto I3 = std::next(I2); if (I3 == MBB.end()) { ++MBBI; continue; }
+    auto I4 = std::next(I3); if (I4 == MBB.end()) { ++MBBI; continue; }
+    auto I5 = std::next(I4); if (I5 == MBB.end()) { ++MBBI; continue; }
+    auto I6 = std::next(I5); if (I6 == MBB.end()) { ++MBBI; continue; }
+    auto I7 = std::next(I6); if (I7 == MBB.end()) { ++MBBI; continue; }
+
+    // I2: SFPLOAD from same spill addr (redundant reload)
+    if (I2->getOpcode() != RISCV::SFPLOAD_BH && I2->getOpcode() != RISCV::SFPLOAD_WH) { ++MBBI; continue; }
+    if (!I2->getOperand(I2->getNumOperands()-1).isImm() ||
+        I2->getOperand(I2->getNumOperands()-1).getImm() != SpillAddr) { ++MBBI; continue; }
+
+    // I3: SFPLUTFP32
+    if (I3->getOpcode() != RISCV::SFPLUTFP32) { ++MBBI; continue; }
+
+    // I4: SFPMOV dest, L7 (copy LUT result)
+    if (I4->getOpcode() != RISCV::SFPMOV) { ++MBBI; continue; }
+    if (!I4->getOperand(2).isReg() || I4->getOperand(2).getReg() != RISCV::L7) { ++MBBI; continue; }
+
+    // I5: SFPLOAD from same spill addr (reload half_in)
+    if (I5->getOpcode() != RISCV::SFPLOAD_BH && I5->getOpcode() != RISCV::SFPLOAD_WH) { ++MBBI; continue; }
+    if (!I5->getOperand(I5->getNumOperands()-1).isImm() ||
+        I5->getOperand(I5->getNumOperands()-1).getImm() != SpillAddr) { ++MBBI; continue; }
+    Register ReloadReg = I5->getOperand(0).getReg();
+
+    // I6: SFPADD using both LUT result and reloaded half_in
+    if (I6->getOpcode() != RISCV::SFPADD) { ++MBBI; continue; }
+
+    // Pattern matched! Replace with: SFPLUTFP32 -> SFPADD(SpillReg, L10, SpillReg, L7)
+    // The SFPLUTFP32 stays (it has side effects). Remove spill store, both loads,
+    // SFPMOV, and replace SFPADD operands.
+    BuildMI(MBB, I6, I6->getDebugLoc(), TII->get(RISCV::SFPADD), SpillReg)
+        .addReg(RISCV::L10)
+        .addReg(SpillReg)
+        .addReg(RISCV::L7)
+        .addImm(0);
+
+    // Set MBBI to after the new SFPADD (skip over I7 which is SFPMOV for store)
+    MBBI = std::next(I6);
+
+    // Also erase I7 (SFPMOV that copied result — no longer needed since
+    // SFPADD now writes directly to SpillReg which goes to SFPSTORE)
+    if (I7 != MBB.end() && (I7->getOpcode() == RISCV::SFPMOV || I7->getOpcode() == RISCV::SFPMOV_LV))
+      I7->eraseFromParent();
+
+    // Erase in reverse order to avoid iterator invalidation
+    I6->eraseFromParent();  // original SFPADD
+    I5->eraseFromParent();  // reload SFPLOAD
+    I4->eraseFromParent();  // SFPMOV from L7
+    I2->eraseFromParent();  // redundant reload
+    I1->eraseFromParent();  // spill SFPSTORE
+
+    Changed = true;
+  }
+  return Changed;
+}
+
+
 bool RISCVXttSFPUPeephole::runOnMachineFunction(MachineFunction &MF) {
   STI = &MF.getSubtarget<RISCVSubtarget>();
 
@@ -265,6 +360,7 @@ bool RISCVXttSFPUPeephole::runOnMachineFunction(MachineFunction &MF) {
     Changed |= tryFuseLZSetCC(MBB);
     Changed |= tryFuseExExpSetCC(MBB);
     Changed |= tryEliminateSelfMov(MBB);
+    Changed |= tryEliminateLutSpill(MBB);
   }
 
   return Changed;

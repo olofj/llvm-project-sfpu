@@ -361,7 +361,7 @@ bool RISCVXttSFPUCombine::tryCombineLutInput(MachineBasicBlock &MBB) {
       continue;
 
     // SFPLUTFP32 operands: (outs lreg_dest), (ins lreg_c, mod1)
-    // Operand 0 = dest (dead output), operand 1 = lreg_c, operand 2 = mod1.
+    // Operand 0 = dest, operand 1 = lreg_c, operand 2 = mod1.
     Register LutInput = LutMI.getOperand(1).getReg();
     if (!LutInput.isVirtual())
       continue;
@@ -383,6 +383,12 @@ bool RISCVXttSFPUCombine::tryCombineLutInput(MachineBasicBlock &MBB) {
 
     // Redirect SFPLUTFP32 input from %in to %mul_out (operand 1 = lreg_c).
     LutMI.getOperand(1).setReg(MulOut);
+
+    // Mark the dead output as dead. The hardware writes to L7 only
+    // (lreg_dest=7 hardcoded), NOT to whatever the RA assigns. Marking
+    // dead prevents the RA from spilling the previous value in the
+    // assigned register (it knows the def doesn't produce a useful value).
+    LutMI.getOperand(0).setIsDead(true);
 
     LLVM_DEBUG(dbgs() << "  Combined LUT input: " << LutMI);
     Changed = true;
