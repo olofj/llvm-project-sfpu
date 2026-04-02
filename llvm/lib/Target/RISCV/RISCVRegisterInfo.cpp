@@ -979,5 +979,6 @@ bool RISCVRegisterInfo::getRegAllocationHints(
     if (TwoAddrHints.count(OrderReg))
       Hints.push_back(OrderReg);
 
+
   return BaseImplRetVal;
 }
