@@ -369,6 +369,7 @@ bool RISCVXttSFPUReplay::runOnMachineFunction(MachineFunction &MF) {
   if (!STI->hasVendorXttSFPU())
     return false;
 
+
   TII = STI->getInstrInfo();
 
   bool Changed = false;

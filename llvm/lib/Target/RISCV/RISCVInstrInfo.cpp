@@ -626,31 +626,20 @@ void RISCVInstrInfo::storeRegToStackSlot(MachineBasicBlock &MBB,
   else if (RISCV::VRN8M1RegClass.hasSubClassEq(RC))
     Opcode = RISCV::PseudoVSPILL8_M1;
   else if (RISCV::SFPURegsRegClass.hasSubClassEq(RC)) {
-    // SFPU register spill: store to DEST via SFPSTORE.
-    // Uses upper DEST rows as spill area. Each spill slot gets a unique
-    // DEST address computed from the frame index. Kernel data typically
-    // occupies low DEST addresses (0-7 for 8 iterations); spill area
-    // starts at offset 100 to avoid conflict.
+    // SFPU register spill: store to DEST via SFPSTORE with frame index.
+    // The frame index is converted to a DEST address by eliminateFrameIndex.
     auto &Subtarget = MF->getSubtarget<RISCVSubtarget>();
     unsigned StoreOpc = Subtarget.hasVendorXttSFPUBH()
                             ? RISCV::SFPSTORE_BH : RISCV::SFPSTORE_WH;
-    // Map frame index to a DEST row in the spill area.
-    // Kernel data occupies low DEST rows (0-15 for 8 elements × stride 2).
-    // Spill area starts at row 16. Use addr_mode=7 which the kernel
-    // framework configures for NOINC (SFPSTORE_ADDR_MODE_NOINC = 7 on BH).
-    unsigned SpillAddr = 16 + (unsigned)(FI < 0 ? -FI : FI) * 2;
-    if (SpillAddr > 8191) SpillAddr = 8191;
-    // mod0=4 = BOB32 (Bag Of Bits 32): preserves all 32 bits raw,
-    // no format conversion. Critical for spilling arbitrary SFPU values.
+    MachineMemOperand *MMO = MF->getMachineMemOperand(
+        MachinePointerInfo::getFixedStack(*MF, FI), MachineMemOperand::MOStore,
+        MFI.getObjectSize(FI), MFI.getObjectAlign(FI));
     BuildMI(MBB, I, DebugLoc(), get(StoreOpc))
         .addReg(SrcReg, getKillRegState(IsKill))
-        .addImm(0)              // mod0 = 0 (SRCB format, matches kernel)
+        .addImm(0)              // mod0 = 0 (SRCB format)
         .addImm(7)              // addr_mode = 7 (NOINC on BH)
-        .addImm(SpillAddr);
-    // NOP after store to ensure DEST write completes before any reload.
-    // SFPSTORE is a 2-cycle instruction; without a NOP, a subsequent
-    // SFPLOAD from the same address may read stale data.
-    BuildMI(MBB, I, DebugLoc(), get(RISCV::SFPNOP));
+        .addFrameIndex(FI)      // addr = frame index (resolved later)
+        .addMemOperand(MMO);
     return;
   }
   else
@@ -737,16 +726,18 @@ void RISCVInstrInfo::loadRegFromStackSlot(MachineBasicBlock &MBB,
   else if (RISCV::VRN8M1RegClass.hasSubClassEq(RC))
     Opcode = RISCV::PseudoVRELOAD8_M1;
   else if (RISCV::SFPURegsRegClass.hasSubClassEq(RC)) {
-    // SFPU register reload: load from DEST via SFPLOAD.
+    // SFPU register reload: load from DEST via SFPLOAD with frame index.
     auto &Subtarget = MF->getSubtarget<RISCVSubtarget>();
     unsigned LoadOpc = Subtarget.hasVendorXttSFPUBH()
                            ? RISCV::SFPLOAD_BH : RISCV::SFPLOAD_WH;
-    unsigned SpillAddr = 16 + (unsigned)(FI < 0 ? -FI : FI) * 2;
-    if (SpillAddr > 8191) SpillAddr = 8191;
+    MachineMemOperand *MMO = MF->getMachineMemOperand(
+        MachinePointerInfo::getFixedStack(*MF, FI), MachineMemOperand::MOLoad,
+        MFI.getObjectSize(FI), MFI.getObjectAlign(FI));
     BuildMI(MBB, I, DebugLoc(), get(LoadOpc), DstReg)
-        .addImm(0)              // mod0 = 0 (SRCB format, matches kernel)
+        .addImm(0)              // mod0 = 0 (SRCB format)
         .addImm(7)              // addr_mode = 7 (NOINC on BH)
-        .addImm(SpillAddr);
+        .addFrameIndex(FI)      // addr = frame index (resolved later)
+        .addMemOperand(MMO);
     return;
   }
   else

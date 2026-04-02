@@ -355,7 +355,7 @@ class SFPUStochRnd<bits<8> opcode, string opcodestr>
 //---
 class SFPULutFP32<bits<8> opcode, string opcodestr>
     : SFPUUnary<opcode, opcodestr,
-                (outs SFPURegs:$lreg_dest),
+                (outs SFPUL7Reg:$lreg_dest),
                 (ins SFPUAllRegs:$lreg_c, uimm4_sfpu:$mod1),
                 "$lreg_dest, $lreg_c, $mod1"> {
   let imm12 = 0;

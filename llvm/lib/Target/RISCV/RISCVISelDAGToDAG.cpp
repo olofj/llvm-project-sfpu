@@ -2111,10 +2111,11 @@ void RISCVDAGToDAGISel::Select(SDNode *Node) {
 
     // SFPLUTFP32: (src_reg, mod1) — 2 args only
     case Intrinsic::riscv_tt_sfplutfp32: {
-      // SFPLUTFP32 hardware always writes result to L7 (Defs=[L0,L1,L7]).
-      // Emit the instruction normally, then read L7 via CopyFromReg.
-      // The SFPLUTFP32 explicit output is dead (RA assigns but unused);
-      // the CopyFromReg(L7) provides the actual result as a virtual reg.
+      // SFPLUTFP32 hardware writes result to L7 (lreg_dest hardcoded to 7).
+      // The output register class is SFPUL7Reg = {L7}, so the RA assigns
+      // the output to L7. This prevents the RA from incorrectly thinking
+      // another register (like L3) is clobbered, avoiding unnecessary spills.
+      // The result is used directly from the SFPLUTFP32 output (no SFPMOV needed).
       SDValue Chain = Node->getOperand(0);
       SDValue Src = Node->getOperand(2);
       SDValue Mod1 = SFPU_IMM(Node->getOperand(3));
@@ -2122,19 +2123,7 @@ void RISCVDAGToDAGISel::Select(SDNode *Node) {
         Src = CurDAG->getRegister(RISCV::L0 + C->getZExtValue(), MVT::i32);
       MachineSDNode *Lut = CurDAG->getMachineNode(
           RISCV::SFPLUTFP32, DL, MVT::i32, MVT::Other, {Src, Mod1, Chain});
-      SDValue LutChain = SDValue(Lut, 1);
-      // Read L7 via SFPMOV → result stays in SFPURegs (not CopyFromReg
-      // which creates a GPR vreg). Physical L7 can't be used directly
-      // because the liveness pass may convert consumers to _LV variants
-      // with tied operands that require virtual registers.
-      SDValue L7Src = CurDAG->getRegister(RISCV::L7, MVT::i32);
-      SDValue Zero = CurDAG->getTargetConstant(0, DL, MVT::i32);
-      MachineSDNode *Mov = CurDAG->getMachineNode(
-          RISCV::SFPMOV, DL, MVT::i32, MVT::Other,
-          {Zero, L7Src, Zero, LutChain});
-      CurDAG->ReplaceAllUsesOfValueWith(SDValue(Node, 0), SDValue(Mov, 0));
-      CurDAG->ReplaceAllUsesOfValueWith(SDValue(Node, 1), SDValue(Mov, 1));
-      CurDAG->RemoveDeadNode(Node);
+      ReplaceNode(Node, Lut);
       return;
     }
 

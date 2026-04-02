@@ -73,6 +73,14 @@ def SFPUAllRegs : RegisterClass<"RISCV", [i32], 32,
   let isAllocatable = 0;
 }
 
+// Single-register class for SFPLUTFP32's output: hardware always writes to L7.
+// Using this class forces the RA to assign the output to L7, preventing it
+// from assigning another allocatable register (like L3) that would incorrectly
+// appear as clobbered and trigger an unnecessary spill.
+def SFPUL7Reg : RegisterClass<"RISCV", [i32], 32, (add L7)> {
+  let Size = 32;
+}
+
 // Registers valid as SFPSTORE source (E-005: L12-L15 cannot be store source).
 def SFPUStoreRegs : RegisterClass<"RISCV", [i32], 32,
     (add L0, L1, L2, L3, L4, L5, L6, L7,

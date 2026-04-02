@@ -503,6 +503,17 @@ bool RISCVRegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
   Register FrameReg;
   StackOffset Offset =
       getFrameLowering(MF)->getFrameIndexReference(MF, FrameIndex, FrameReg);
+  // SFPU spill: SFPSTORE/SFPLOAD with frame index as addr operand.
+  // Convert FI to a DEST row address (16 + FI*2) and replace the operand.
+  unsigned Opc = MI.getOpcode();
+  if (Opc == RISCV::SFPSTORE_BH || Opc == RISCV::SFPSTORE_WH ||
+      Opc == RISCV::SFPLOAD_BH || Opc == RISCV::SFPLOAD_WH) {
+    unsigned SpillAddr = 16 + (unsigned)FrameIndex * 2;
+    if (SpillAddr > 8191) SpillAddr = 8191;
+    MI.getOperand(FIOperandNum).ChangeToImmediate(SpillAddr);
+    return false;
+  }
+
   bool IsRVVSpill = RISCV::isRVVSpill(MI);
   if (!IsRVVSpill)
     Offset += StackOffset::getFixed(MI.getOperand(FIOperandNum + 1).getImm());
